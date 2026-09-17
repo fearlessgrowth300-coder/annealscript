@@ -26,6 +26,7 @@ program         = { statement } ;
 statement       = struct_def
                 | let_stmt
                 | set_stmt
+                | index_set_stmt
                 | intent_stmt
                 | bound_stmt
                 | print_stmt
@@ -33,12 +34,19 @@ statement       = struct_def
                 | while_stmt
                 | for_stmt
                 | fn_def
-                | return_stmt ;
+                | return_stmt
+                | "break"
+                | "continue" ;
 
 if_stmt         = "if" , expr , block , [ "else" , ( block | if_stmt ) ] ;
 while_stmt      = "while" , expr , block ;
 for_stmt        = "for" , identifier , "in" , expr , block ;  (* expr must be a list *)
 block           = "{" , { statement } , "}" ;
+
+(* `set xs[i] = v` (list, bounds-checked) or `set d[k] = v` (dict, always
+   inserts/overwrites) -- a distinct statement from set_stmt, not a
+   general lvalue on it; see the note on `Stmt::IndexSet` in ast.rs. *)
+index_set_stmt  = "set" , identifier , "[" , expr , "]" , "=" , expr ;
 
 fn_def          = "fn" , identifier , "(" , [ param , { "," , param } ] , ")" ,
                    [ "->" , type ] , block ;
@@ -105,8 +113,7 @@ call_expr       = identifier , "(" , [ expr , { "," , expr } ] , ")" ;
                      to disambiguate namespaces yet. *)
 
 dict_literal    = "{" , [ pair , { "," , pair } ] , "}" ;
-pair            = string , ":" , value ;
-value           = string | number | boolean ;
+pair            = string , ":" , expr ;   (* values are full expressions, see §6c *)
 
 literal         = string | number | boolean ;
 ```
@@ -226,24 +233,52 @@ fn factorial(n: int) -> int {
   This holds even with closures: writes inside a function body can never
   reach the caller's actual storage regardless of what it captured, for
   the same "swap env out, swap it back" reason above.
+- **`break`/`continue`** work inside `while`/`for` the way they do in any
+  imperative language (`break` stops the loop; `continue` skips to the
+  next iteration's condition check). There's no static check for using
+  either outside a loop -- it's a runtime error ("'break'/'continue' used
+  outside of a loop") instead.
 
 ## 6b. Lists
 
 ```
 let xs = [1, 2, 3]
 let first = xs[0]
+set xs[1] = 99          # in-place index assignment
 for x in xs {
   print(x)
 }
 ```
 
-Lists are immutable values (`Value::List` in `runtime.rs`), like
-everything else in the runtime. There's no mutation-in-place or index
-assignment (`xs[0] = 5` doesn't parse) -- `list_push` (§7) returns a new
-list, and the idiom is `set xs = list_push(xs, item)`. `for var in expr`
-requires `expr` to evaluate to a list; `var` is bound in the current scope
-for each element in turn and keeps its last value after the loop ends,
-the same way Python's own `for` variable leaks.
+Lists are `Value::List` in `runtime.rs`. `set xs[i] = v` (`index_set_stmt`,
+bounds-checked) mutates the list already bound to `xs` in place.
+`list_push` (§7) is still functional -- it returns a *new* list with the
+item appended, since changing a list's length isn't index assignment's
+job; the idiom for growing one is `set xs = list_push(xs, item)`. `for var
+in expr` requires `expr` to evaluate to a list; `var` is bound in the
+current scope for each element in turn and keeps its last value after the
+loop ends, the same way Python's own `for` variable leaks. There's no
+reference/aliasing between two `let`-bound names -- `let ys = xs` copies,
+so mutating `ys` never affects `xs`.
+
+## 6c. Dicts
+
+```
+let x = 5
+let d = {"a": x + 1, "b": "hello"}
+let first = d["a"]      # 6
+set d["c"] = 100          # inserts or overwrites a key
+```
+
+`{...}` is now a general-purpose dict literal -- `Value::Dict` in
+`runtime.rs`, holding arbitrary `Value`s (previously only literal values,
+used solely as an `intent` source). `d[key]` reads by string key (a
+missing key is a runtime error, not `None`/`null`); `set d[key] = v`
+always succeeds, inserting the key if it wasn't already there. Same
+value/no-aliasing semantics as lists (§6b). This is also still exactly
+what `intent` expects as a source, unchanged -- `resolve_intent` reads a
+`Value::Dict` directly, so any dict expression (not just a literal) can
+feed an `intent` block now.
 
 ## 7. Standard library (flat builtins, `compiler/src/stdlib.rs`)
 
@@ -257,7 +292,7 @@ name; each is namespaced in name only:
 | `safety_clamp(v, lo, hi)` | `std::safety` | clamps a value into `[lo, hi]` |
 | `tensor_similarity(a, b)` | `std::tensor` | runs the real ONNX Runtime quantized-similarity graph (see §8) |
 | `html_extract(html, {field: css_selector, ...})` | `std::html` | real CSS-selector extraction (via `scraper`/html5ever) into a dict; first match only, text content only |
-| `list_len(xs)` / `list_push(xs, item)` | (list helpers) | length, and a new list with `item` appended (lists are immutable -- see §6b) |
+| `list_len(xs)` / `list_push(xs, item)` | (list helpers) | length, and a new list with `item` appended (`list_push` is functional -- growing a list is not the same operation as `set xs[i] = v`, see §6b) |
 
 ## 8. Execution model
 
@@ -290,15 +325,16 @@ name; each is namespaced in name only:
 
 ## 10. Explicitly out of scope so far
 
-- `use`/module paths, `break`/`continue`, index assignment (`xs[0] = v`),
-  dicts as a general-purpose type (`{}` is still only usable as an
-  `intent` source, not a first-class mutable map) — the grammar in §2 is
-  everything that exists.
+- `use`/module paths, classes/methods, exceptions/`try`-`catch` — each is
+  a separate, substantially larger undertaking than what's here (a real
+  object model, or a new `Flow` variant threaded through every
+  propagation site including the guarded-execution path) and deserves its
+  own pass rather than being rushed in alongside a smaller batch.
 - LLVM IR codegen, a standalone tensor execution graph, GGML bindings —
   this is still an interpreter, not a compiler to machine code, despite
   the name.
 - A hosted package registry; TLS in `net_get`; semver ranges in `annealpm`
   (exact version or `*`/latest only).
 - General SMT reasoning over branches/loops — `solver.rs` conservatively
-  defers to the runtime guard for any `bound` body containing `if`/`while`
-  rather than attempt it (§6).
+  defers to the runtime guard for any `bound` body containing
+  `if`/`while`/`for` rather than attempt it (§6).

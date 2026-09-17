@@ -27,7 +27,13 @@ pub enum Value {
     Num(f64),
     Str(String),
     Bool(bool),
-    Dict(HashMap<String, Literal>),
+    /// A general-purpose dict (arbitrary keys to arbitrary `Value`s), and
+    /// also what an `intent` source must evaluate to -- `resolve_intent`
+    /// reads straight out of one. `set d[k] = v` (`Stmt::IndexSet`) mutates
+    /// this map in place inside `env`; there's no reference/aliasing
+    /// between two `let`-bound names, though -- `let b = a` still copies,
+    /// so mutating `b`'s dict never affects `a`'s.
+    Dict(HashMap<String, Value>),
     Struct(HashMap<String, Value>),
     Prob(Box<Value>, f32),
     /// The value of a bare `return;` or of calling a function that falls
@@ -43,7 +49,12 @@ pub fn format_value(v: &Value) -> String {
         Value::Num(n) => format!("{n}"),
         Value::Str(s) => s.clone(),
         Value::Bool(b) => b.to_string(),
-        Value::Dict(_) => "<dict>".to_string(),
+        Value::Dict(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            let pairs: Vec<String> = keys.iter().map(|k| format!("{k:?}: {}", format_value(&m[*k]))).collect();
+            format!("{{{}}}", pairs.join(", "))
+        }
         Value::Struct(_) => "<struct>".to_string(),
         Value::Prob(inner, conf) => format!("Probability({}, conf={:.2})", format_value(inner), conf),
         Value::Unit => "()".to_string(),
@@ -126,29 +137,36 @@ fn zero_value(ty: &Type) -> Value {
     }
 }
 
-fn coerce(lit: &Literal, ty: &Type) -> Option<Value> {
+/// Coerces a raw `Value` (from an `intent` source dict -- so realistically
+/// always a `Str`/`Num`/`Bool`, but the source is untyped and now general-
+/// purpose, so anything else is handled too) into the field's declared
+/// type. Nothing outside the primitive types can coerce into anything --
+/// a `Dict`/`List`/`Struct` source field just falls through to `None`
+/// (and from there to the field's `default`), same as always.
+fn coerce(value: &Value, ty: &Type) -> Option<Value> {
     match ty {
-        Type::String => Some(Value::Str(match lit {
-            Literal::Str(s) => s.clone(),
-            Literal::Num(n) => n.to_string(),
-            Literal::Bool(b) => b.to_string(),
+        Type::String => Some(Value::Str(match value {
+            Value::Str(s) => s.clone(),
+            Value::Num(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            _ => return None,
         })),
-        Type::Int | Type::Float => match lit {
-            Literal::Num(n) => Some(Value::Num(*n)),
-            Literal::Str(s) => s.trim().parse::<f64>().ok().map(Value::Num),
-            Literal::Bool(_) => None,
+        Type::Int | Type::Float => match value {
+            Value::Num(n) => Some(Value::Num(*n)),
+            Value::Str(s) => s.trim().parse::<f64>().ok().map(Value::Num),
+            _ => None,
         },
-        Type::Bool => match lit {
-            Literal::Bool(b) => Some(Value::Bool(*b)),
-            Literal::Str(s) => match s.trim().to_lowercase().as_str() {
+        Type::Bool => match value {
+            Value::Bool(b) => Some(Value::Bool(*b)),
+            Value::Str(s) => match s.trim().to_lowercase().as_str() {
                 "true" => Some(Value::Bool(true)),
                 "false" => Some(Value::Bool(false)),
                 _ => None,
             },
-            Literal::Num(n) if *n == 0.0 || *n == 1.0 => Some(Value::Bool(*n == 1.0)),
+            Value::Num(n) if *n == 0.0 || *n == 1.0 => Some(Value::Bool(*n == 1.0)),
             _ => None,
         },
-        Type::Probability(inner) => coerce(lit, inner),
+        Type::Probability(inner) => coerce(value, inner),
         Type::Named(_) => None,
     }
 }
@@ -192,7 +210,7 @@ fn best_match<'a>(target: &str, available: &'a [String]) -> Option<(&'a String, 
         })
 }
 
-fn resolve_intent(raw: &HashMap<String, Literal>, fields: &[Field], threshold: f32) -> HashMap<String, Value> {
+fn resolve_intent(raw: &HashMap<String, Value>, fields: &[Field], threshold: f32) -> HashMap<String, Value> {
     let mut available: Vec<String> = raw.keys().cloned().collect();
     let mut result = HashMap::new();
     for field in fields {
@@ -235,11 +253,15 @@ pub struct ProfileEvent {
 }
 
 /// What a statement (or a whole body) did, beyond "ran": `Return` unwinds
-/// out of `if`/`while` bodies up to the enclosing function call, the way
-/// it would in any imperative language.
+/// up to the enclosing function call; `Break`/`Continue` unwind up to the
+/// nearest enclosing `while`/`for`, which absorbs them (see those arms in
+/// `exec_flow`/`exec_guarded`) instead of propagating further.
+#[derive(PartialEq)]
 enum Flow {
     Normal,
     Return(Value),
+    Break,
+    Continue,
 }
 
 pub struct Runtime {
@@ -272,14 +294,17 @@ impl Runtime {
                 self.functions.insert(name.clone(), (params.clone(), body.clone(), HashMap::new()));
             }
         }
-        self.exec_body(program).map(|_| ())
+        match self.exec_body(program)? {
+            Flow::Normal | Flow::Return(_) => Ok(()),
+            Flow::Break | Flow::Continue => Err("'break'/'continue' used outside of a loop".into()),
+        }
     }
 
     fn exec_body(&mut self, body: &[Stmt]) -> Result<Flow, String> {
         for stmt in body {
             match self.exec_flow(stmt)? {
                 Flow::Normal => continue,
-                flow @ Flow::Return(_) => return Ok(flow),
+                other => return Ok(other),
             }
         }
         Ok(Flow::Normal)
@@ -297,7 +322,14 @@ impl Runtime {
         match expr {
             Expr::Literal(lit) => Ok(literal_to_value(lit)),
             Expr::Ident(name) => self.env.get(name).cloned().ok_or_else(|| format!("undefined variable {name:?}")),
-            Expr::Dict(pairs) => Ok(Value::Dict(pairs.iter().cloned().collect())),
+            Expr::Dict(pairs) => {
+                let mut m = HashMap::new();
+                for (k, e) in pairs {
+                    let v = self.eval(e)?;
+                    m.insert(k.clone(), v);
+                }
+                Ok(Value::Dict(m))
+            }
             Expr::FieldAccess(obj, field) => match self.env.get(obj) {
                 Some(Value::Struct(m)) => {
                     m.get(field).cloned().ok_or_else(|| format!("struct {obj:?} has no field {field:?}"))
@@ -349,6 +381,7 @@ impl Runtime {
                     match result? {
                         Flow::Return(v) => Ok(v),
                         Flow::Normal => Ok(Value::Unit),
+                        Flow::Break | Flow::Continue => Err(format!("'break'/'continue' used outside of a loop, inside {name:?}")),
                     }
                 } else {
                     crate::stdlib::call(name, arg_values)
@@ -359,19 +392,27 @@ impl Runtime {
                 Ok(Value::List(values?))
             }
             Expr::Index { list, index } => {
-                let list_val = self.eval(list)?;
-                let items = match list_val {
-                    Value::List(items) => items,
-                    other => return Err(format!("cannot index into {other:?} (not a list)")),
-                };
-                let idx = as_num(&self.eval(index)?, "index")?;
-                if idx < 0.0 || idx.fract() != 0.0 {
-                    return Err(format!("list index must be a non-negative whole number, got {idx}"));
+                let container = self.eval(list)?;
+                match container {
+                    Value::List(items) => {
+                        let idx = as_num(&self.eval(index)?, "index")?;
+                        if idx < 0.0 || idx.fract() != 0.0 {
+                            return Err(format!("list index must be a non-negative whole number, got {idx}"));
+                        }
+                        items
+                            .get(idx as usize)
+                            .cloned()
+                            .ok_or_else(|| format!("index {idx} out of bounds for a list of length {}", items.len()))
+                    }
+                    Value::Dict(map) => {
+                        let key = match self.eval(index)? {
+                            Value::Str(s) => s,
+                            other => return Err(format!("dict key must be a string, got {other:?}")),
+                        };
+                        map.get(&key).cloned().ok_or_else(|| format!("dict has no key {key:?}"))
+                    }
+                    other => Err(format!("cannot index into {other:?} (not a list or dict)")),
                 }
-                items
-                    .get(idx as usize)
-                    .cloned()
-                    .ok_or_else(|| format!("index {idx} out of bounds for a list of length {}", items.len()))
             }
         }
     }
@@ -406,7 +447,8 @@ impl Runtime {
             Stmt::While { cond, body } => {
                 while self.eval_bool(cond, "while")? {
                     match self.exec_body(body)? {
-                        Flow::Normal => continue,
+                        Flow::Normal | Flow::Continue => continue,
+                        Flow::Break => break,
                         flow @ Flow::Return(_) => return Ok(flow),
                     }
                 }
@@ -424,12 +466,16 @@ impl Runtime {
                 for item in items {
                     self.env.insert(var.clone(), item);
                     match self.exec_body(body)? {
-                        Flow::Normal => continue,
+                        Flow::Normal | Flow::Continue => continue,
+                        Flow::Break => break,
                         flow @ Flow::Return(_) => return Ok(flow),
                     }
                 }
                 Ok(Flow::Normal)
             }
+            Stmt::Break => Ok(Flow::Break),
+            Stmt::Continue => Ok(Flow::Continue),
+            Stmt::IndexSet { container, index, value } => self.exec_index_set(container, index, value).map(|_| Flow::Normal),
             Stmt::Return(expr) => {
                 let v = match expr {
                     Some(e) => self.eval(e)?,
@@ -444,6 +490,40 @@ impl Runtime {
         match self.eval(expr)? {
             Value::Bool(b) => Ok(b),
             other => Err(format!("{who} condition must be a bool, got {other:?}")),
+        }
+    }
+
+    /// `set xs[i] = v` / `set d[k] = v`. Mutates the container already
+    /// bound to `container` in place (see the note on `Value::Dict`); the
+    /// index/value expressions are evaluated before the container is
+    /// borrowed mutably so they can themselves reference `container`
+    /// (e.g. `set xs[i] = xs[i] + 1`) without a borrow conflict.
+    fn exec_index_set(&mut self, container: &str, index: &Expr, value: &Expr) -> Result<(), String> {
+        let index_val = self.eval(index)?;
+        let value_val = self.eval(value)?;
+        match self.env.get_mut(container) {
+            Some(Value::List(items)) => {
+                let idx = as_num(&index_val, "index")?;
+                if idx < 0.0 || idx.fract() != 0.0 {
+                    return Err(format!("list index must be a non-negative whole number, got {idx}"));
+                }
+                let idx = idx as usize;
+                if idx >= items.len() {
+                    return Err(format!("index {idx} out of bounds for a list of length {}", items.len()));
+                }
+                items[idx] = value_val;
+                Ok(())
+            }
+            Some(Value::Dict(map)) => {
+                let key = match index_val {
+                    Value::Str(s) => s,
+                    other => return Err(format!("dict key must be a string, got {other:?}")),
+                };
+                map.insert(key, value_val);
+                Ok(())
+            }
+            Some(other) => Err(format!("{container:?} is not a list or dict (got {other:?})")),
+            None => Err(format!("undefined variable {container:?}")),
         }
     }
 
@@ -555,7 +635,8 @@ impl Runtime {
             Stmt::While { cond, body } => {
                 while self.eval_bool(cond, "while")? {
                     match self.exec_guarded_body(body, var, op, limit)? {
-                        Flow::Normal => continue,
+                        Flow::Normal | Flow::Continue => continue,
+                        Flow::Break => break,
                         flow @ Flow::Return(_) => return Ok(flow),
                     }
                 }
@@ -569,7 +650,8 @@ impl Runtime {
                 for item in items {
                     self.env.insert(loop_var.clone(), item);
                     match self.exec_guarded_body(body, var, op, limit)? {
-                        Flow::Normal => continue,
+                        Flow::Normal | Flow::Continue => continue,
+                        Flow::Break => break,
                         flow @ Flow::Return(_) => return Ok(flow),
                     }
                 }
@@ -583,7 +665,7 @@ impl Runtime {
         for s in body {
             match self.exec_guarded(s, var, op, limit)? {
                 Flow::Normal => continue,
-                flow @ Flow::Return(_) => return Ok(flow),
+                other => return Ok(other),
             }
         }
         Ok(Flow::Normal)
@@ -906,5 +988,80 @@ bound speed <= 15 {
 "#,
         );
         assert_eq!(rt.env["speed"], Value::Num(10.0));
+    }
+
+    #[test]
+    fn break_stops_a_while_loop_early() {
+        let rt = run(
+            r#"
+let i = 0
+while i < 100 {
+  if i == 3 {
+    break
+  }
+  set i = i + 1
+}
+"#,
+        );
+        assert_eq!(rt.env["i"], Value::Num(3.0));
+    }
+
+    #[test]
+    fn continue_skips_the_rest_of_a_for_iteration() {
+        let rt = run(
+            r#"
+let xs = [1, 2, 3, 4, 5]
+let total = 0
+for x in xs {
+  if x == 3 {
+    continue
+  }
+  set total = total + x
+}
+"#,
+        );
+        assert_eq!(rt.env["total"], Value::Num(12.0)); // everything except 3
+    }
+
+    #[test]
+    fn break_outside_a_loop_is_a_runtime_error() {
+        let program = parse(lex("break").unwrap()).unwrap();
+        let mut rt = Runtime::new();
+        let err = rt.run(&program).unwrap_err();
+        assert!(err.contains("outside of a loop"), "got {err:?}");
+    }
+
+    #[test]
+    fn index_assignment_mutates_a_list_in_place() {
+        let rt = run(
+            r#"
+let xs = [1, 2, 3]
+set xs[1] = 99
+"#,
+        );
+        assert_eq!(rt.env["xs"], Value::List(vec![Value::Num(1.0), Value::Num(99.0), Value::Num(3.0)]));
+    }
+
+    #[test]
+    fn general_dict_supports_expr_values_indexing_and_assignment() {
+        let rt = run(
+            r#"
+let x = 5
+let d = {"a": x + 1, "b": "hello"}
+let first = d["a"]
+set d["c"] = 100
+let third = d["c"]
+"#,
+        );
+        assert_eq!(rt.env["first"], Value::Num(6.0));
+        assert_eq!(rt.env["third"], Value::Num(100.0));
+        match &rt.env["d"] {
+            Value::Dict(m) => {
+                assert_eq!(m["a"], Value::Num(6.0));
+                assert_eq!(m["b"], Value::Str("hello".into()));
+                assert_eq!(m["c"], Value::Num(100.0));
+            }
+            other => panic!("expected Dict, got {other:?}"),
+        }
     }
 }

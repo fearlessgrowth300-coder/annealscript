@@ -143,9 +143,9 @@ fn html_extract(args: Vec<Value>) -> Result<Value, String> {
 
     let document = scraper::Html::parse_document(&html);
     let mut result = HashMap::new();
-    for (field, selector_lit) in selectors {
-        let selector_str = match selector_lit {
-            crate::ast::Literal::Str(s) => s,
+    for (field, selector_val) in selectors {
+        let selector_str = match selector_val {
+            Value::Str(s) => s,
             other => return Err(format!("html_extract: selector for {field:?} must be a string, got {other:?}")),
         };
         let selector = scraper::Selector::parse(&selector_str)
@@ -155,7 +155,7 @@ fn html_extract(args: Vec<Value>) -> Result<Value, String> {
             .next()
             .map(|el| el.text().collect::<String>().trim().to_string())
             .unwrap_or_default();
-        result.insert(field, crate::ast::Literal::Str(text));
+        result.insert(field, Value::Str(text));
     }
     Ok(Value::Dict(result))
 }
@@ -234,14 +234,14 @@ mod tests {
         let markup = "<div class='card-402'><h2 class='item-heading'>Bluetooth Speaker</h2>\
                        <span class='val-tag'>$89.99</span></div>";
         let mut selectors = HashMap::new();
-        selectors.insert("title".to_string(), crate::ast::Literal::Str(".item-heading".into()));
-        selectors.insert("price".to_string(), crate::ast::Literal::Str(".val-tag".into()));
+        selectors.insert("title".to_string(), Value::Str(".item-heading".into()));
+        selectors.insert("price".to_string(), Value::Str(".val-tag".into()));
 
         let result = call("html_extract", vec![Value::Str(markup.into()), Value::Dict(selectors)]).unwrap();
         match result {
             Value::Dict(m) => {
-                assert_eq!(m["title"], crate::ast::Literal::Str("Bluetooth Speaker".into()));
-                assert_eq!(m["price"], crate::ast::Literal::Str("$89.99".into()));
+                assert_eq!(m["title"], Value::Str("Bluetooth Speaker".into()));
+                assert_eq!(m["price"], Value::Str("$89.99".into()));
             }
             other => panic!("expected Dict, got {other:?}"),
         }
@@ -250,10 +250,10 @@ mod tests {
     #[test]
     fn html_extract_missing_selector_yields_empty_string() {
         let mut selectors = HashMap::new();
-        selectors.insert("missing".to_string(), crate::ast::Literal::Str(".nope".into()));
+        selectors.insert("missing".to_string(), Value::Str(".nope".into()));
         let result = call("html_extract", vec![Value::Str("<div></div>".into()), Value::Dict(selectors)]).unwrap();
         match result {
-            Value::Dict(m) => assert_eq!(m["missing"], crate::ast::Literal::Str("".into())),
+            Value::Dict(m) => assert_eq!(m["missing"], Value::Str("".into())),
             other => panic!("expected Dict, got {other:?}"),
         }
     }

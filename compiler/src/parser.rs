@@ -86,6 +86,14 @@ impl Parser {
             Token::For => self.parse_for(),
             Token::Fn => self.parse_fn(),
             Token::Return => self.parse_return(),
+            Token::Break => {
+                self.advance();
+                Ok(Stmt::Break)
+            }
+            Token::Continue => {
+                self.advance();
+                Ok(Stmt::Continue)
+            }
             other => Err(self.err(format!("unexpected token {other:?} at statement start"))),
         }
     }
@@ -241,6 +249,14 @@ impl Parser {
     fn parse_set(&mut self) -> PResult<Stmt> {
         self.expect(&Token::Set)?;
         let name = self.expect_ident()?;
+        if *self.peek() == Token::LBracket {
+            self.advance();
+            let index = self.parse_expr()?;
+            self.expect(&Token::RBracket)?;
+            self.expect(&Token::Equals)?;
+            let value = self.parse_expr()?;
+            return Ok(Stmt::IndexSet { container: name, index, value });
+        }
         self.expect(&Token::Equals)?;
         let expr = self.parse_expr()?;
         Ok(Stmt::Set { name, expr })
@@ -515,7 +531,7 @@ impl Parser {
                 other => return Err(ParseError { message: format!("expected string key, got {other:?}"), line: key_line }),
             };
             self.expect(&Token::Colon)?;
-            let value = self.parse_literal()?;
+            let value = self.parse_expr()?;
             pairs.push((key, value));
             if *self.peek() == Token::Comma {
                 self.advance();

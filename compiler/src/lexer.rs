@@ -21,6 +21,8 @@ pub enum Token {
     In,
     Fn,
     Return,
+    Break,
+    Continue,
     Arrow,    // ->
     FatArrow, // =>
     Le,       // <=
@@ -158,6 +160,8 @@ pub fn lex(src: &str) -> Result<Vec<Spanned>, LexError> {
                 "in" => Token::In,
                 "fn" => Token::Fn,
                 "return" => Token::Return,
+                "break" => Token::Break,
+                "continue" => Token::Continue,
                 _ => Token::Ident(text),
             };
             tokens.push((tok, line));

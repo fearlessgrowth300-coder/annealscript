@@ -51,7 +51,11 @@ pub enum Expr {
     Literal(Literal),
     Ident(String),
     FieldAccess(String, String),
-    Dict(Vec<(String, Literal)>),
+    /// General dict literal: `{"a": 1, "b": x + 1}`. Values are full
+    /// expressions now, not just literals -- the same syntax also serves
+    /// as an `intent` source (see `runtime.rs`'s `resolve_intent`), which
+    /// works because `Literal` is a subset of `Value`.
+    Dict(Vec<(String, Expr)>),
     Resolve {
         subject: Box<Expr>,
         threshold: f64,
@@ -103,6 +107,18 @@ pub enum Stmt {
         name: String,
         expr: Expr,
     },
+    /// `set xs[i] = v` (for a list -- bounds-checked) or `set d[k] = v`
+    /// (for a dict -- inserts or overwrites `k`). A distinct statement
+    /// from `Set` rather than a general lvalue on it, so the bound-scope
+    /// rule and the solver -- both of which key off `Set { name, .. }`
+    /// naming a *numeric* variable directly -- don't need to reason about
+    /// it: a bound variable is always a number, never a list/dict, so an
+    /// `IndexSet` can never be the write a `bound` block is guarding.
+    IndexSet {
+        container: String,
+        index: Expr,
+        value: Expr,
+    },
     Intent {
         source: Expr,
         struct_name: String,
@@ -149,6 +165,10 @@ pub enum Stmt {
         body: Vec<Stmt>,
     },
     Return(Option<Expr>),
+    /// Only valid inside a `while`/`for` body; a runtime error otherwise
+    /// (there's no static check for this yet).
+    Break,
+    Continue,
 }
 
 pub type Program = Vec<Stmt>;
