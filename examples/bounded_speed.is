@@ -1,0 +1,13 @@
+# A vision/sensor model suggests a speed. It might be wrong or malicious --
+# the `bound` block enforces the hard safety limit deterministically,
+# regardless of what the dynamic code inside it tries to do.
+
+let speed = 0
+let sensor_suggestion = 22
+
+bound speed <= 15 {
+  set speed = sensor_suggestion
+  print(speed)
+}
+
+print(speed)

@@ -1,0 +1,13 @@
+# The smallest complete IntentScript program: declare a struct, map a
+# dict into it with `intent`, print the result.
+
+struct User {
+  username: string default ""
+  age: int default 0
+}
+
+let raw = {"username": "alice", "age": "30"}
+intent raw -> User as user
+
+print(user.username)
+print(user.age)

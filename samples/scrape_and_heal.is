@@ -1,0 +1,17 @@
+# Scrape a messy HTML snippet, then let `intent` heal whatever's missing.
+# html_extract does the parsing (real CSS selectors, not regex-on-HTML);
+# intent does the schema-healing on the dict it produces.
+
+struct Product {
+  title: string default "Unknown Item"
+  price: string default "$0.00"
+}
+
+let markup = "<div class='card-402'><h2 class='item-heading'>Bluetooth Speaker</h2><span class='val-tag'>$89.99</span></div>"
+
+let selectors = {"title": ".item-heading", "price": ".val-tag"}
+let raw = html_extract(markup, selectors)
+intent raw -> Product as product
+
+print(product.title)
+print(product.price)

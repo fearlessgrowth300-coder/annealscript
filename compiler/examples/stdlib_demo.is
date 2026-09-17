@@ -1,0 +1,11 @@
+# Exercises all four Phase 4 stdlib modules from real IntentScript source.
+
+let wrote = fs_write_file("stdlib_demo_scratch.txt", "hello from intentscript")
+let contents = fs_read_file("stdlib_demo_scratch.txt")
+print(contents)
+
+let clamped = safety_clamp(999, 0, 15)
+print(clamped)
+
+let score = tensor_similarity("username", "usr_nm")
+print(score)

@@ -1,0 +1,32 @@
+# A safety-critical variable (e.g. a robot's commanded speed) wrapped in a
+# `bound` block. Three outcomes, all real, none simulated:
+#   - a literal assignment that's provably safe runs with zero guard cost
+#   - a literal assignment that's provably unsafe is rejected before the
+#     block even executes -- the bad value never reaches memory
+#   - a value from an untyped source (an intent-resolved field) can't be
+#     proven safe statically, so a runtime guard checks it before commit
+
+struct SensorReading {
+  suggested_speed: int default 0
+}
+
+let speed = 0
+bound speed <= 15 {
+  set speed = 10          # provably safe: runs with no runtime check
+}
+print(speed)
+
+let reckless = 0
+bound reckless <= 15 {
+  set reckless = 999      # provably unsafe: this whole block is skipped
+}
+print(reckless)
+
+let raw = {"suggested_speed": "12"}
+intent raw -> SensorReading as reading
+
+let guarded = 0
+bound guarded <= 15 {
+  set guarded = reading.suggested_speed   # unknown to the solver -> runtime guard
+}
+print(guarded)

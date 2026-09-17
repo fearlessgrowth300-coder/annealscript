@@ -1,0 +1,25 @@
+# Self-healing ETL: the upstream API renamed its fields and dropped one
+# entirely (a normal struct decode would throw here). `intent` fuzzy-maps
+# what it can find and falls back to `default` for what it can't -- the
+# pipeline degrades instead of crashing.
+
+struct User {
+  username: string default ""
+  age: int default 0
+  email: string default "unknown@example.com"
+  trust: Probability<float>
+}
+
+# Renamed keys, a stringy age, and no email at all.
+let raw = {"usr_nm": "alice", "Age": "30"}
+intent raw -> User as user
+
+print(user.username)
+print(user.age)
+print(user.email)
+
+# `trust` is Probability<float>: it always resolves, even with nothing to
+# match against, but with confidence 0 -- so downstream code can tell the
+# difference between "matched" and "guessed".
+let verified_trust = resolve user.trust { above 0.5 => user.trust, else => 0.0 }
+print(verified_trust)

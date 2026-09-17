@@ -1,0 +1,15 @@
+struct User {
+  username: string default "",
+  age: int default 0,
+  trust: Probability<float>
+}
+
+let raw = {"usr_nm": "alice", "Age": "30"}
+intent raw -> User as user
+
+let speed = 0
+bound speed <= 15 {
+  set speed = 20
+}
+
+print(user.username)

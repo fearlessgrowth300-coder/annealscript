@@ -1,0 +1,15 @@
+StructDef Product {
+    title: String = "Unknown Item",
+    price: Num = 0.0
+}
+
+Let raw_scraped_markup = Dict(("html_chunk", Str("<div class='card-402'><h2 class='item-heading'>Bluetooth Speaker</h2><span class='val-tag'>$89.99</span></div>")))
+
+Intent parse_scraped_page {
+    source: raw_scraped_markup,
+    struct_name: "Product",
+    var: "clean_product"
+}
+
+Print(FieldAccess("clean_product", "title"))
+Print(FieldAccess("clean_product", "price"))

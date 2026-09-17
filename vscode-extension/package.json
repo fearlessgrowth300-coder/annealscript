@@ -1,0 +1,42 @@
+{
+  "name": "intentscript",
+  "displayName": "IntentScript",
+  "description": "Syntax highlighting, diagnostics, and Run & Profile for IntentScript (.is)",
+  "version": "0.1.0",
+  "publisher": "intentscript-alpha",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages"],
+  "activationEvents": ["onLanguage:intentscript"],
+  "main": "./src/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "intentscript",
+        "aliases": ["IntentScript"],
+        "extensions": [".is"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "intentscript",
+        "scopeName": "source.intentscript",
+        "path": "./syntaxes/intentscript.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "IntentScript",
+      "properties": {
+        "intentscript.serverPath": {
+          "type": "string",
+          "default": "intentscript-lsp",
+          "description": "Path to the intentscript-lsp binary (defaults to looking it up on PATH)."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

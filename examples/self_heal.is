@@ -1,0 +1,23 @@
+# The API/scraper renamed its fields (usr_nm, Age as a string, no
+# email_address key at all) -- a normal struct decode would throw.
+# IntentScript's `intent` block maps what it can and heals the rest.
+
+struct User {
+  username: string
+  age: int
+  email: string
+}
+
+let raw = {"usr_nm": "alice", "Age": "30", "email_address": "a@b.com"}
+intent raw -> User as user
+
+print(user.username)
+print(user.age)
+print(user.email)
+
+let broken = {"usr_nm": "bob"}
+intent broken -> User as user2
+
+print(user2.username)
+print(user2.age)
+print(user2.email)

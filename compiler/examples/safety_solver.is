@@ -1,0 +1,26 @@
+struct Reading {
+  level: int default 0,
+  trust: Probability<float>
+}
+
+let raw = {"levl": "12", "confidence_src": "0.9"}
+intent raw -> Reading as r
+
+let speed = 0
+bound speed <= 15 {
+  set speed = 10
+}
+
+let unsafe_try = 0
+bound unsafe_try <= 15 {
+  set unsafe_try = 22
+}
+
+let guarded = 0
+bound guarded <= 15 {
+  set guarded = r.level
+}
+
+print(guarded)
+print(speed)
+print(unsafe_try)

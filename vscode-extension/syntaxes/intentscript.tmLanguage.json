@@ -1,0 +1,61 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "IntentScript",
+  "scopeName": "source.intentscript",
+  "fileTypes": ["is"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#operators" },
+    { "include": "#function-calls" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [{ "name": "comment.line.number-sign.intentscript", "match": "#.*$" }]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.intentscript",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [{ "name": "constant.character.escape.intentscript", "match": "\\\\." }]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [{ "name": "constant.numeric.intentscript", "match": "\\b\\d+(\\.\\d+)?\\b" }]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.intentscript",
+          "match": "\\b(struct|let|set|intent|bound|as|print|default|resolve|above|else)\\b"
+        },
+        { "name": "constant.language.intentscript", "match": "\\b(true|false)\\b" }
+      ]
+    },
+    "types": {
+      "patterns": [
+        { "name": "storage.type.intentscript", "match": "\\b(int|float|bool|string|Probability)\\b" },
+        { "name": "entity.name.type.struct.intentscript", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        { "name": "keyword.operator.intentscript", "match": "->|=>|<=|>=|=" }
+      ]
+    },
+    "function-calls": {
+      "patterns": [
+        {
+          "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "name": "entity.name.function.intentscript"
+        }
+      ]
+    }
+  }
+}
