@@ -1,4 +1,4 @@
-# IntentScript — Phase 1: Grammar & Type Specification
+# AnnealScript — Phase 1: Grammar & Type Specification
 
 > **Superseded by [`/SPEC.md`](../SPEC.md).** Kept for history: this was
 > the original design spec, written before any of it was implemented. Most

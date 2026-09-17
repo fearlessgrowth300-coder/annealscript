@@ -1,4 +1,4 @@
-# IntentScript Language Specification
+# AnnealScript Language Specification
 
 Canonical grammar, type system, and implementation status. This supersedes
 the Phase 1 draft at `docs/grammar-and-types.md` (kept for history) — it
@@ -169,17 +169,17 @@ name; each is namespaced in name only:
 
 ## 9. Tooling
 
-- **intentpm** (`intentpm/`): a package manager over a local filesystem
-  registry (no hosted server), handling both `lib` (IntentScript source)
+- **annealpm** (`annealpm/`): a package manager over a local filesystem
+  registry (no hosted server), handling both `lib` (AnnealScript source)
   and `model` (versioned `.onnx` + metadata) packages, with real SHA-256
-  content hashes in `intent.lock`.
-- **intentscript-lsp** (`intentscript-lsp/`): an LSP server providing
+  content hashes in `anneal.lock`.
+- **annealscript-lsp** (`annealscript-lsp/`): an LSP server providing
   diagnostics (parse errors with real line numbers; the two rules in §4/§6),
   a CodeLens over `intent`/`bound` lines that runs the file and reports
   real measured latency/confidence/verdict, driving the VS Code/Cursor
   extension in `vscode-extension/`.
 - **Syntax highlighting** is a TextMate grammar
-  (`vscode-extension/syntaxes/intentscript.tmLanguage.json`), not an LSP
+  (`vscode-extension/syntaxes/annealscript.tmLanguage.json`), not an LSP
   feature — the editor's native mechanism already does this.
 
 ## 10. Explicitly out of scope so far
@@ -187,7 +187,7 @@ name; each is namespaced in name only:
 - User-defined functions, `use`/module paths, arithmetic expressions,
   control flow (`if`/loops) — the grammar in §2 is everything that exists.
 - LLVM IR codegen, a standalone tensor execution graph, GGML bindings.
-- A hosted package registry; TLS in `net_get`; semver ranges in `intentpm`
+- A hosted package registry; TLS in `net_get`; semver ranges in `annealpm`
   (exact version or `*`/latest only).
 - General SMT reasoning beyond the bound rule — `solver.rs` documents
   exactly when the interval-style encoding it uses would need to become

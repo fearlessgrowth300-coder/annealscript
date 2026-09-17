@@ -1,5 +1,5 @@
 """Smallest runnable check: intent mapping heals renamed/missing/mistyped
-fields instead of crashing. Run: python test_intentscript.py"""
+fields instead of crashing. Run: python test_annealscript.py"""
 from interpreter import run_source, StructInstance
 
 SRC = """

@@ -8,7 +8,7 @@
 //! exe fails to load with STATUS_DLL_NOT_FOUND the moment it's run from
 //! outside `cargo run` (confirmed via `dumpbin /DEPENDENTS`). This copies
 //! every .dll produced under any `z3-sys-*` build directory next to the
-//! final binary, so `target/<profile>/intentscript-compiler.exe` is
+//! final binary, so `target/<profile>/annealscript-compiler.exe` is
 //! actually standalone.
 
 use std::env;
@@ -19,7 +19,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-    // OUT_DIR = target/<profile>/build/intentscript-compiler-<hash>/out
+    // OUT_DIR = target/<profile>/build/annealscript-compiler-<hash>/out
     let Some(build_root) = out_dir.ancestors().nth(2) else { return };
     let Some(target_dir) = out_dir.ancestors().nth(3) else { return };
 

@@ -2,7 +2,7 @@
 //! std::html.
 //!
 //! There is no module/import syntax yet (`use std::fs`), so these are
-//! exposed to IntentScript source as flat builtin call names --
+//! exposed to AnnealScript source as flat builtin call names --
 //! `fs_read_file(...)`, `net_get(...)`, `safety_clamp(...)`,
 //! `tensor_similarity(...)`, `html_extract(...)` -- dispatched from
 //! `runtime::Expr::Call`. Each flat name documents which std module it
@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn fs_write_then_read_round_trips() {
-        let path = std::env::temp_dir().join("intentscript_stdlib_test.txt");
+        let path = std::env::temp_dir().join("annealscript_stdlib_test.txt");
         let path_str = path.to_string_lossy().to_string();
         call("fs_write_file", vec![Value::Str(path_str.clone()), Value::Str("hello".into())]).unwrap();
         assert_eq!(call("fs_exists", vec![Value::Str(path_str.clone())]).unwrap(), Value::Bool(true));

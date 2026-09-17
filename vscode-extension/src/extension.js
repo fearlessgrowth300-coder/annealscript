@@ -7,7 +7,7 @@ const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
 let client;
 
 function activate(context) {
-  const serverPath = vscode.workspace.getConfiguration("intentscript").get("serverPath") || "intentscript-lsp";
+  const serverPath = vscode.workspace.getConfiguration("annealscript").get("serverPath") || "annealscript-lsp";
 
   const serverOptions = {
     command: serverPath,
@@ -15,16 +15,16 @@ function activate(context) {
   };
 
   const clientOptions = {
-    documentSelector: [{ scheme: "file", language: "intentscript" }],
+    documentSelector: [{ scheme: "file", language: "annealscript" }],
   };
 
-  client = new LanguageClient("intentscript", "IntentScript Language Server", serverOptions, clientOptions);
+  client = new LanguageClient("annealscript", "AnnealScript Language Server", serverOptions, clientOptions);
   client.start();
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("intentscript.runProfile", (uri) =>
+    vscode.commands.registerCommand("annealscript.runProfile", (uri) =>
       client.sendRequest("workspace/executeCommand", {
-        command: "intentscript.runProfile",
+        command: "annealscript.runProfile",
         arguments: [uri.toString()],
       })
     )

@@ -1,17 +1,17 @@
-//! IntentScript Language Server. Talks LSP over stdio, so the same binary
+//! AnnealScript Language Server. Talks LSP over stdio, so the same binary
 //! works from VS Code and Cursor (a VS Code fork using the same extension
 //! API) -- one server, one extension package, no separate Cursor build.
 //!
 //! Provides:
 //! - diagnostics from the real lexer/parser/typechecker in
-//!   intentscript-compiler (parse errors, and the Phase 1 intent-boundary
+//!   annealscript-compiler (parse errors, and the Phase 1 intent-boundary
 //!   and bound-scope rules from typecheck.rs)
 //! - a CodeLens ("Run & Profile") above every `intent`/`bound` statement
 //!   that actually executes the file through the compiler's `--profile`
 //!   flag and reports real measured latency/confidence/verdict as hints.
 //!
 //! Syntax highlighting is NOT done here -- that's a TextMate grammar in
-//! the VS Code extension (vscode-extension/syntaxes/intentscript.tmLanguage.json).
+//! the VS Code extension (vscode-extension/syntaxes/annealscript.tmLanguage.json).
 //! Reimplementing highlighting via LSP semantic tokens when the editor's
 //! native grammar mechanism already does it would be duplicate work for a
 //! worse result.
@@ -30,7 +30,7 @@ use lsp_types::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use intentscript_compiler::{lexer, parser, typecheck};
+use annealscript_compiler::{lexer, parser, typecheck};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (connection, io_threads) = Connection::stdio();
@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
         code_lens_provider: Some(CodeLensOptions { resolve_provider: Some(false) }),
         execute_command_provider: Some(ExecuteCommandOptions {
-            commands: vec!["intentscript.runProfile".to_string()],
+            commands: vec!["annealscript.runProfile".to_string()],
             work_done_progress_options: Default::default(),
         }),
         ..Default::default()
@@ -115,7 +115,7 @@ fn diag_at_line(line: u32, message: String) -> Diagnostic {
     Diagnostic {
         range: Range::new(Position::new(line, 0), Position::new(line, 200)),
         severity: Some(DiagnosticSeverity::ERROR),
-        source: Some("intentscript".to_string()),
+        source: Some("annealscript".to_string()),
         message,
         ..Default::default()
     }
@@ -150,7 +150,7 @@ fn handle_request(connection: &Connection, docs: &HashMap<Uri, String>, req: Lsp
         }
         ExecuteCommand::METHOD => {
             let params: ExecuteCommandParams = serde_json::from_value(req.params)?;
-            if params.command == "intentscript.runProfile" {
+            if params.command == "annealscript.runProfile" {
                 if let Some(uri) = params.arguments.first().and_then(|v| v.as_str()).and_then(|s| s.parse::<Uri>().ok()) {
                     if let Some(text) = docs.get(&uri) {
                         run_and_publish_profile(connection, &uri, text)?;
@@ -183,7 +183,7 @@ fn code_lenses(uri: &Uri, text: &str) -> Vec<CodeLens> {
             range: Range::new(Position::new(i as u32, 0), Position::new(i as u32, 0)),
             command: Some(Command {
                 title: "▶ Run & Profile".to_string(),
-                command: "intentscript.runProfile".to_string(),
+                command: "annealscript.runProfile".to_string(),
                 arguments: Some(vec![serde_json::Value::String(uri.as_str().to_string())]),
             }),
             data: None,
@@ -192,7 +192,7 @@ fn code_lenses(uri: &Uri, text: &str) -> Vec<CodeLens> {
 }
 
 fn compiler_binary() -> PathBuf {
-    let exe = if cfg!(windows) { "intentscript-compiler.exe" } else { "intentscript-compiler" };
+    let exe = if cfg!(windows) { "annealscript-compiler.exe" } else { "annealscript-compiler" };
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../compiler/target/debug").join(exe)
 }
 
@@ -206,7 +206,7 @@ fn compiler_binary() -> PathBuf {
 /// binary; fixed for good in compiler/build.rs, so the direct path works
 /// now and skips the cargo-invocation overhead.
 fn run_and_publish_profile(connection: &Connection, uri: &Uri, text: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = std::env::temp_dir().join(format!("intentscript_lsp_{}.is", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("annealscript_lsp_{}.anl", std::process::id()));
     std::fs::write(&tmp, text)?;
 
     let output = std::process::Command::new(compiler_binary()).arg("--profile").arg(&tmp).output();
@@ -215,7 +215,7 @@ fn run_and_publish_profile(connection: &Connection, uri: &Uri, text: &str) -> Re
     let output = match output {
         Ok(o) => o,
         Err(e) => {
-            let diag = diag_at_line(0, format!("could not run intentscript-compiler: {e} (build it with `cargo build` in compiler/)"));
+            let diag = diag_at_line(0, format!("could not run annealscript-compiler: {e} (build it with `cargo build` in compiler/)"));
             publish(connection, uri, vec![diag])?;
             return Ok(());
         }
@@ -226,7 +226,7 @@ fn run_and_publish_profile(connection: &Connection, uri: &Uri, text: &str) -> Re
         publish(connection, uri, vec![diag_at_line(0, format!("profiling run failed: {stderr}"))])?;
         return Ok(());
     };
-    let events: Vec<intentscript_compiler::runtime::ProfileEvent> = serde_json::from_str(json_line)?;
+    let events: Vec<annealscript_compiler::runtime::ProfileEvent> = serde_json::from_str(json_line)?;
 
     let mut diags = Vec::new();
     for ev in events {
@@ -247,7 +247,7 @@ fn run_and_publish_profile(connection: &Connection, uri: &Uri, text: &str) -> Re
         diags.push(Diagnostic {
             range: Range::new(Position::new(line, 0), Position::new(line, 200)),
             severity: Some(DiagnosticSeverity::HINT),
-            source: Some("intentscript-profile".to_string()),
+            source: Some("annealscript-profile".to_string()),
             message: format!("{}us -- {}", ev.micros, ev.detail),
             ..Default::default()
         });

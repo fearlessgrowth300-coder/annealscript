@@ -20,7 +20,7 @@ pub struct Diagnostic {
     /// real source spans through the AST yet, so this is best-effort: the
     /// struct/bound's own declaration order, not a line number. The LSP
     /// layer re-derives line numbers by re-scanning source text for the
-    /// offending name (see intentscript-lsp/src/main.rs).
+    /// offending name (see annealscript-lsp/src/main.rs).
     pub anchor: String,
 }
 

@@ -1,37 +1,37 @@
 {
-  "name": "intentscript",
-  "displayName": "IntentScript",
-  "description": "Syntax highlighting, diagnostics, and Run & Profile for IntentScript (.is)",
+  "name": "annealscript",
+  "displayName": "AnnealScript",
+  "description": "Syntax highlighting, diagnostics, and Run & Profile for AnnealScript (.anl)",
   "version": "0.1.0",
-  "publisher": "intentscript-alpha",
+  "publisher": "annealscript-alpha",
   "private": true,
   "engines": { "vscode": "^1.85.0" },
   "categories": ["Programming Languages"],
-  "activationEvents": ["onLanguage:intentscript"],
+  "activationEvents": ["onLanguage:annealscript"],
   "main": "./src/extension.js",
   "contributes": {
     "languages": [
       {
-        "id": "intentscript",
-        "aliases": ["IntentScript"],
-        "extensions": [".is"],
+        "id": "annealscript",
+        "aliases": ["AnnealScript"],
+        "extensions": [".anl"],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "intentscript",
-        "scopeName": "source.intentscript",
-        "path": "./syntaxes/intentscript.tmLanguage.json"
+        "language": "annealscript",
+        "scopeName": "source.annealscript",
+        "path": "./syntaxes/annealscript.tmLanguage.json"
       }
     ],
     "configuration": {
-      "title": "IntentScript",
+      "title": "AnnealScript",
       "properties": {
-        "intentscript.serverPath": {
+        "annealscript.serverPath": {
           "type": "string",
-          "default": "intentscript-lsp",
-          "description": "Path to the intentscript-lsp binary (defaults to looking it up on PATH)."
+          "default": "annealscript-lsp",
+          "description": "Path to the annealscript-lsp binary (defaults to looking it up on PATH)."
         }
       }
     }

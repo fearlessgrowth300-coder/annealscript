@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "annealpm"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -59,13 +66,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
 dependencies = [
  "typenum",
-]
-
-[[package]]
-name = "intentpm"
-version = "0.1.0"
-dependencies = [
- "sha2",
 ]
 
 [[package]]

@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-use intentscript_compiler::{lexer, parser, runtime, split, typecheck};
+use annealscript_compiler::{lexer, parser, runtime, split, typecheck};
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -10,7 +10,7 @@ fn main() -> ExitCode {
     let path = match args.iter().find(|a| *a != "--profile") {
         Some(p) => p.clone(),
         None => {
-            eprintln!("usage: intentscript-compiler [--profile] <file.is>");
+            eprintln!("usage: annealscript-compiler [--profile] <file.anl>");
             return ExitCode::FAILURE;
         }
     };

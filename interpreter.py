@@ -1,4 +1,4 @@
-"""IntentScript toy interpreter.
+"""AnnealScript toy interpreter.
 
 Proves one mechanic: an `intent` block maps messy/mismatched dict data into a
 declared struct by fuzzy key matching + type coercion, never raising on

@@ -1,7 +1,7 @@
 # Rust build artifacts (each crate builds independently, not a workspace)
 /compiler/target/
-/intentpm/target/
-/intentscript-lsp/target/
+/annealpm/target/
+/annealscript-lsp/target/
 **/*.rs.bk
 
 # Python prototype bytecode
@@ -12,8 +12,8 @@ __pycache__/
 node_modules/
 *.vsix
 
-# intentpm scratch/demo state -- not real project content
-/intentpm/demo/
+# annealpm scratch/demo state -- not real project content
+/annealpm/demo/
 
 # run-time scratch output from example scripts (fs_write_file demos, etc.)
 compiler/stdlib_demo_scratch.txt

@@ -1,4 +1,4 @@
-//! intent.lock: the exact resolved version + content hash for each
+//! anneal.lock: the exact resolved version + content hash for each
 //! installed package, in the same `key = value` blocks-separated-by-blank-
 //! lines format as package.manifest.
 
@@ -59,7 +59,7 @@ mod tests {
 
     #[test]
     fn round_trips_multiple_entries() {
-        let path = std::env::temp_dir().join(format!("intentpm_lock_test_{}.lock", std::process::id()));
+        let path = std::env::temp_dir().join(format!("annealpm_lock_test_{}.lock", std::process::id()));
         let mut lock = Lockfile { entries: BTreeMap::new() };
         lock.entries.insert("greeter".into(), LockEntry { version: Version::parse("1.2.0").unwrap(), kind: Kind::Lib, hash: "abc123".into() });
         lock.entries.insert("similarity".into(), LockEntry { version: Version::parse("0.1.0").unwrap(), kind: Kind::Model, hash: "def456".into() });

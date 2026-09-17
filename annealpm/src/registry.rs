@@ -1,9 +1,9 @@
 //! Local filesystem package registry.
 //!
-//! There's no hosted intentpm server -- building a fake network client
+//! There's no hosted annealpm server -- building a fake network client
 //! against infrastructure that doesn't exist would be pure scaffolding.
 //! What's real here: version resolution, content-hashed installs, and
-//! handling `lib` (IntentScript source) and `model` (quantized .onnx +
+//! handling `lib` (AnnealScript source) and `model` (quantized .onnx +
 //! metadata) packages through the identical publish/resolve/copy/hash
 //! path. Swap `Registry` for an HTTP-backed client once there's a server
 //! to talk to -- `resolve`/`publish`'s signatures don't need to change.
@@ -116,7 +116,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn temp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("intentpm_test_{label}_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("annealpm_test_{label}_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
