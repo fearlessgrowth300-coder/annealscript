@@ -31,11 +31,13 @@ statement       = struct_def
                 | print_stmt
                 | if_stmt
                 | while_stmt
+                | for_stmt
                 | fn_def
                 | return_stmt ;
 
 if_stmt         = "if" , expr , block , [ "else" , ( block | if_stmt ) ] ;
 while_stmt      = "while" , expr , block ;
+for_stmt        = "for" , identifier , "in" , expr , block ;  (* expr must be a list *)
 block           = "{" , { statement } , "}" ;
 
 fn_def          = "fn" , identifier , "(" , [ param , { "," , param } ] , ")" ,
@@ -74,15 +76,21 @@ equality_expr   = comparison_expr , { ( "==" | "!=" ) , comparison_expr } ;
 comparison_expr = additive_expr , { ( "<" | ">" | "<=" | ">=" ) , additive_expr } ;
 additive_expr   = multiplicative_expr , { ( "+" | "-" ) , multiplicative_expr } ;
 multiplicative_expr = unary_expr , { ( "*" | "/" | "%" ) , unary_expr } ;
-unary_expr      = [ "-" | "!" ] , unary_expr | primary_expr ;
+unary_expr      = [ "-" | "!" ] , unary_expr | postfix_expr ;
+
+(* a primary followed by zero or more `[index]` suffixes, e.g. `xs[0][1]` *)
+postfix_expr    = primary_expr , { "[" , expr , "]" } ;
 
 primary_expr    = dict_literal
+                | list_literal
                 | field_access
                 | resolve_expr
                 | call_expr
                 | "(" , expr , ")"
                 | identifier
                 | literal ;
+
+list_literal    = "[" , [ expr , { "," , expr } ] , "]" ;
 
 field_access    = identifier , "." , identifier ;
 
@@ -166,7 +174,7 @@ Implemented in `runtime.rs`'s `eval`.
   loops, so it conservatively defers rather than risk missing a write
   hidden in a branch. The runtime guard (`Runtime::exec_guarded`) still
   walks the real nesting and catches every write to the bound variable at
-  whatever depth it's at, `if`/`while` included.
+  whatever depth it's at, `if`/`while`/`for` included.
 
 ```
 let speed = 0
@@ -191,24 +199,51 @@ fn factorial(n: int) -> int {
 }
 ```
 
-- **No closures.** A function body sees only its own parameters -- it
-  cannot read or write the caller's `let`/`set` variables at all, even
-  same-named ones. Calling a function swaps `env` for a fresh scope
-  containing just the bound arguments, runs the body, then restores the
-  caller's `env`. This is a real simplification (see `ast.rs`'s note on
-  `Stmt::FnDef`), not an oversight -- nothing so far needs a captured
-  environment, and it keeps the runtime's scoping to one flat map per call
-  instead of a chain.
+- **Closures capture by value, at definition time.** When a `fn` statement
+  executes, `env` at that moment is snapshotted into the function's entry;
+  calling the function starts from that snapshot with the arguments
+  overlaid on top (params shadow same-named captures). A `set` on a
+  captured name inside the function only mutates its own local copy --
+  the caller's actual variable is restored untouched when the call
+  returns, because calling swaps `env` out entirely and swaps it back
+  afterward. This means: a function sees whatever its enclosing scope held
+  *when it was defined*, not live updates made after that point (see
+  `ast.rs`'s note on `Stmt::FnDef`); real reference-capturing closures
+  would need shared mutable cells (`Rc<RefCell<...>>`) threaded through
+  the environment, which nothing so far has needed.
 - **Hoisting**: top-level `fn` definitions can be called before their
   textual position in the file (`Runtime::run` registers them all before
-  executing anything). A function defined inside a nested block is only
+  executing anything, with an empty captured scope at that point).
+  Execution re-captures a fresher snapshot once it naturally reaches the
+  `fn` statement. A function defined inside a nested block is only
   registered once execution reaches it -- no hoisting there.
 - **No unit type in the surface syntax**: a bare `return` and a function
   that falls off the end of its body both produce `Value::Unit` internally
   (prints as `()`), but there's no way to name that type in a signature.
-- The bound-scope rule (§6) also holds across `if`/`while` at the same
-  scope, but treats a function body as a clean slate with no active
+- The bound-scope rule (§6) also holds across `if`/`while`/`for` at the
+  same scope, but treats a function body as a clean slate with no active
   bounds inherited from the caller -- see `typecheck.rs`'s `walk_scope`.
+  This holds even with closures: writes inside a function body can never
+  reach the caller's actual storage regardless of what it captured, for
+  the same "swap env out, swap it back" reason above.
+
+## 6b. Lists
+
+```
+let xs = [1, 2, 3]
+let first = xs[0]
+for x in xs {
+  print(x)
+}
+```
+
+Lists are immutable values (`Value::List` in `runtime.rs`), like
+everything else in the runtime. There's no mutation-in-place or index
+assignment (`xs[0] = 5` doesn't parse) -- `list_push` (§7) returns a new
+list, and the idiom is `set xs = list_push(xs, item)`. `for var in expr`
+requires `expr` to evaluate to a list; `var` is bound in the current scope
+for each element in turn and keeps its last value after the loop ends,
+the same way Python's own `for` variable leaks.
 
 ## 7. Standard library (flat builtins, `compiler/src/stdlib.rs`)
 
@@ -222,6 +257,7 @@ name; each is namespaced in name only:
 | `safety_clamp(v, lo, hi)` | `std::safety` | clamps a value into `[lo, hi]` |
 | `tensor_similarity(a, b)` | `std::tensor` | runs the real ONNX Runtime quantized-similarity graph (see §8) |
 | `html_extract(html, {field: css_selector, ...})` | `std::html` | real CSS-selector extraction (via `scraper`/html5ever) into a dict; first match only, text content only |
+| `list_len(xs)` / `list_push(xs, item)` | (list helpers) | length, and a new list with `item` appended (lists are immutable -- see §6b) |
 
 ## 8. Execution model
 
@@ -254,8 +290,10 @@ name; each is namespaced in name only:
 
 ## 10. Explicitly out of scope so far
 
-- Closures, arrays/lists, `use`/module paths, `for` loops, `break`/
-  `continue` — the grammar in §2 is everything that exists.
+- `use`/module paths, `break`/`continue`, index assignment (`xs[0] = v`),
+  dicts as a general-purpose type (`{}` is still only usable as an
+  `intent` source, not a first-class mutable map) — the grammar in §2 is
+  everything that exists.
 - LLVM IR codegen, a standalone tensor execution graph, GGML bindings —
   this is still an interpreter, not a compiler to machine code, despite
   the name.

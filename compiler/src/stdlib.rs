@@ -22,8 +22,8 @@
 //! already expects as a source -- no grammar changes needed, the dict
 //! literal and call-expression syntax added in earlier phases already
 //! cover it. Only first-match text extraction is implemented; extracting
-//! attributes or repeated elements into a list is deferred until a script
-//! actually needs it (there's no list/array type in the language yet).
+//! attributes or every matching element into a list is deferred until a
+//! script actually needs it.
 
 use crate::runtime::{quantize, Value};
 use crate::tensor_onnx;
@@ -40,6 +40,8 @@ pub fn call(name: &str, args: Vec<Value>) -> Result<Value, String> {
         "safety_clamp" => safety_clamp(args),
         "tensor_similarity" => tensor_similarity(args),
         "html_extract" => html_extract(args),
+        "list_len" => list_len(args),
+        "list_push" => list_push(args),
         other => Err(format!("unknown builtin {other:?}")),
     }
 }
@@ -156,6 +158,30 @@ fn html_extract(args: Vec<Value>) -> Result<Value, String> {
         result.insert(field, crate::ast::Literal::Str(text));
     }
     Ok(Value::Dict(result))
+}
+
+// ---------- lists ----------
+// Lists are immutable values, like everything else here: `list_push`
+// returns a NEW list rather than mutating in place (there's no reference/
+// pointer type to mutate through). The idiom is `set xs = list_push(xs, v)`.
+
+fn list_len(args: Vec<Value>) -> Result<Value, String> {
+    let [list] = take_args(args, "list_len")?;
+    match list {
+        Value::List(items) => Ok(Value::Num(items.len() as f64)),
+        other => Err(format!("list_len expects a list, got {other:?}")),
+    }
+}
+
+fn list_push(args: Vec<Value>) -> Result<Value, String> {
+    let [list, item] = take_args(args, "list_push")?;
+    match list {
+        Value::List(mut items) => {
+            items.push(item);
+            Ok(Value::List(items))
+        }
+        other => Err(format!("list_push expects a list, got {other:?}")),
+    }
 }
 
 fn take_args<const N: usize>(args: Vec<Value>, who: &str) -> Result<[Value; N], String> {

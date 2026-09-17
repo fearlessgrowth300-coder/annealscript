@@ -83,6 +83,7 @@ impl Parser {
             Token::Print => self.parse_print(),
             Token::If => self.parse_if(),
             Token::While => self.parse_while(),
+            Token::For => self.parse_for(),
             Token::Fn => self.parse_fn(),
             Token::Return => self.parse_return(),
             other => Err(self.err(format!("unexpected token {other:?} at statement start"))),
@@ -124,6 +125,15 @@ impl Parser {
         let cond = self.parse_expr()?;
         let body = self.parse_block()?;
         Ok(Stmt::While { cond, body })
+    }
+
+    fn parse_for(&mut self) -> PResult<Stmt> {
+        self.expect(&Token::For)?;
+        let var = self.expect_ident()?;
+        self.expect(&Token::In)?;
+        let iter = self.parse_expr()?;
+        let body = self.parse_block()?;
+        Ok(Stmt::For { var, iter, body })
     }
 
     fn parse_fn(&mut self) -> PResult<Stmt> {
@@ -382,13 +392,42 @@ impl Parser {
                 self.advance();
                 Ok(Expr::Unary { op: UnOp::Not, expr: Box::new(self.parse_unary()?) })
             }
-            _ => self.parse_primary(),
+            _ => self.parse_postfix(),
         }
+    }
+
+    /// A primary expression followed by zero or more `[index]` suffixes,
+    /// e.g. `matrix[0][1]` or `get_list()[2]`.
+    fn parse_postfix(&mut self) -> PResult<Expr> {
+        let mut expr = self.parse_primary()?;
+        while *self.peek() == Token::LBracket {
+            self.advance();
+            let index = self.parse_expr()?;
+            self.expect(&Token::RBracket)?;
+            expr = Expr::Index { list: Box::new(expr), index: Box::new(index) };
+        }
+        Ok(expr)
+    }
+
+    fn parse_list(&mut self) -> PResult<Expr> {
+        self.expect(&Token::LBracket)?;
+        self.skip_newlines();
+        let mut items = Vec::new();
+        while *self.peek() != Token::RBracket {
+            items.push(self.parse_expr()?);
+            if *self.peek() == Token::Comma {
+                self.advance();
+                self.skip_newlines();
+            }
+        }
+        self.expect(&Token::RBracket)?;
+        Ok(Expr::List(items))
     }
 
     fn parse_primary(&mut self) -> PResult<Expr> {
         match self.peek().clone() {
             Token::LBrace => self.parse_dict(),
+            Token::LBracket => self.parse_list(),
             Token::Resolve => self.parse_resolve(),
             Token::LParen => {
                 self.advance();

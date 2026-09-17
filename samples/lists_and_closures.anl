@@ -1,0 +1,27 @@
+# Lists, for-loops, and closures -- the "feels like Python" additions.
+
+let nums = [1, 2, 3, 4, 5]
+
+let total = 0
+for n in nums {
+  set total = total + n
+}
+print(total)
+
+let doubled = []
+for n in nums {
+  set doubled = list_push(doubled, n * 2)
+}
+print(doubled)
+print(list_len(doubled))
+print(doubled[2])
+
+# closures: capture by value at definition time, not by reference
+let multiplier = 10
+fn scale(x: int) -> int {
+  return x * multiplier
+}
+print(scale(4))
+
+set multiplier = 999
+print(scale(4))  # still 40 -- the closure captured 10, not a live reference

@@ -17,6 +17,8 @@ pub enum Token {
     Else,
     If,
     While,
+    For,
+    In,
     Fn,
     Return,
     Arrow,    // ->
@@ -37,6 +39,8 @@ pub enum Token {
     RBrace,
     LParen,
     RParen,
+    LBracket,
+    RBracket,
     LAngle, // < (generic open, or "less than" in an expression)
     RAngle, // > (generic close, or "greater than" in an expression)
     Colon,
@@ -150,6 +154,8 @@ pub fn lex(src: &str) -> Result<Vec<Spanned>, LexError> {
                 "else" => Token::Else,
                 "if" => Token::If,
                 "while" => Token::While,
+                "for" => Token::For,
+                "in" => Token::In,
                 "fn" => Token::Fn,
                 "return" => Token::Return,
                 _ => Token::Ident(text),
@@ -214,6 +220,8 @@ pub fn lex(src: &str) -> Result<Vec<Spanned>, LexError> {
             '}' => { depth -= 1; Token::RBrace }
             '(' => { depth += 1; Token::LParen }
             ')' => { depth -= 1; Token::RParen }
+            '[' => { depth += 1; Token::LBracket }
+            ']' => { depth -= 1; Token::RBracket }
             '<' => Token::LAngle,
             '>' => Token::RAngle,
             ':' => Token::Colon,

@@ -119,10 +119,17 @@ fn walk_scope(stmts: &[Stmt], active_bounds: &[String], diags: &mut Vec<Diagnost
                 let combined = combine(active_bounds, &scoped_here);
                 walk_scope(body, &combined, diags);
             }
+            Stmt::For { body, .. } => {
+                let combined = combine(active_bounds, &scoped_here);
+                walk_scope(body, &combined, diags);
+            }
             Stmt::FnDef { body, .. } => {
-                // No closures (see ast.rs on `Stmt::FnDef`): a function
-                // body is a fresh scope that can't see the caller's bound
-                // variables at all, so it starts with no active bounds.
+                // Closures capture outer variables BY VALUE (ast.rs's note
+                // on `Stmt::FnDef`): a call swaps in a fresh writable `env`
+                // and restores the caller's on return, so a `set` inside a
+                // function body can never reach the caller's actual bound
+                // variable no matter what it captured. Fresh scope, no
+                // inherited active bounds.
                 walk_scope(body, &[], diags);
             }
             _ => {}

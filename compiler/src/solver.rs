@@ -75,7 +75,7 @@ pub fn solve_bound(
     // makes the whole thing `Unknown` -- the runtime's per-write guard
     // (`Runtime::exec_guarded`) then walks the real nesting and catches
     // every write for real, at whatever depth it's at.
-    if body.iter().any(|s| matches!(s, Stmt::If { .. } | Stmt::While { .. })) {
+    if body.iter().any(|s| matches!(s, Stmt::If { .. } | Stmt::While { .. } | Stmt::For { .. })) {
         return Verdict::Unknown { stmt_index: 0 };
     }
 

@@ -33,7 +33,7 @@
       "patterns": [
         {
           "name": "keyword.control.annealscript",
-          "match": "\\b(struct|let|set|intent|bound|as|print|default|resolve|above|else|if|while|fn|return)\\b"
+          "match": "\\b(struct|let|set|intent|bound|as|print|default|resolve|above|else|if|while|for|in|fn|return)\\b"
         },
         { "name": "constant.language.annealscript", "match": "\\b(true|false)\\b" }
       ]

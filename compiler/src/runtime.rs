@@ -34,6 +34,7 @@ pub enum Value {
     /// off the end of its body without an explicit `return`. There's no
     /// unit/void type in the surface language, just this runtime value.
     Unit,
+    List(Vec<Value>),
 }
 
 pub fn format_value(v: &Value) -> String {
@@ -46,6 +47,7 @@ pub fn format_value(v: &Value) -> String {
         Value::Struct(_) => "<struct>".to_string(),
         Value::Prob(inner, conf) => format!("Probability({}, conf={:.2})", format_value(inner), conf),
         Value::Unit => "()".to_string(),
+        Value::List(items) => format!("[{}]", items.iter().map(format_value).collect::<Vec<_>>().join(", ")),
     }
 }
 
@@ -244,10 +246,10 @@ pub struct Runtime {
     pub structs: HashMap<String, Vec<Field>>,
     pub env: HashMap<String, Value>,
     pub profile: Vec<ProfileEvent>,
-    /// name -> (params, body). No closures: a call gets a fresh scope
-    /// containing only its bound parameters, not the caller's locals --
-    /// see the note on `Stmt::FnDef` in ast.rs for why.
-    functions: HashMap<String, (Vec<(String, Type)>, Vec<Stmt>)>,
+    /// name -> (params, body, captured scope). The captured scope is a
+    /// snapshot of `env` taken BY VALUE at the moment the `fn` statement
+    /// executed -- see the closure note on `Stmt::FnDef` in ast.rs.
+    functions: HashMap<String, (Vec<(String, Type)>, Vec<Stmt>, HashMap<String, Value>)>,
 }
 
 impl Runtime {
@@ -258,12 +260,16 @@ impl Runtime {
     pub fn run(&mut self, program: &Program) -> Result<(), String> {
         // Hoist top-level function definitions so a function can be called
         // before its textual definition, same as most languages allow at
-        // top level. Functions declared inside a nested block are only
-        // registered once execution actually reaches them (no hoisting
-        // there -- an accepted simplification, not an oversight).
+        // top level -- captured scope is empty at this point (nothing has
+        // run yet). Execution re-registers each `fn` with a fresher
+        // snapshot as it naturally reaches that statement, so calling a
+        // hoisted function only sees globals defined earlier in the file
+        // until its own definition line actually executes. Functions
+        // declared inside a nested block are only registered once
+        // execution reaches them (no hoisting there).
         for stmt in program {
             if let Stmt::FnDef { name, params, body, .. } = stmt {
-                self.functions.insert(name.clone(), (params.clone(), body.clone()));
+                self.functions.insert(name.clone(), (params.clone(), body.clone(), HashMap::new()));
             }
         }
         self.exec_body(program).map(|_| ())
@@ -324,7 +330,7 @@ impl Runtime {
             Expr::Call { name, args } => {
                 let arg_values: Result<Vec<Value>, String> = args.iter().map(|a| self.eval(a)).collect();
                 let arg_values = arg_values?;
-                if let Some((params, body)) = self.functions.get(name).cloned() {
+                if let Some((params, body, captured)) = self.functions.get(name).cloned() {
                     if params.len() != arg_values.len() {
                         return Err(format!(
                             "function {name:?} expects {} argument(s), got {}",
@@ -332,8 +338,11 @@ impl Runtime {
                             arg_values.len()
                         ));
                     }
-                    let local_env: HashMap<String, Value> =
-                        params.iter().map(|(pname, _)| pname.clone()).zip(arg_values).collect();
+                    // Start from the closure's captured snapshot, then let
+                    // the arguments shadow any captured name with the same
+                    // spelling -- params win over captures.
+                    let mut local_env = captured;
+                    local_env.extend(params.iter().map(|(pname, _)| pname.clone()).zip(arg_values));
                     let saved_env = std::mem::replace(&mut self.env, local_env);
                     let result = self.exec_body(&body);
                     self.env = saved_env;
@@ -344,6 +353,25 @@ impl Runtime {
                 } else {
                     crate::stdlib::call(name, arg_values)
                 }
+            }
+            Expr::List(items) => {
+                let values: Result<Vec<Value>, String> = items.iter().map(|e| self.eval(e)).collect();
+                Ok(Value::List(values?))
+            }
+            Expr::Index { list, index } => {
+                let list_val = self.eval(list)?;
+                let items = match list_val {
+                    Value::List(items) => items,
+                    other => return Err(format!("cannot index into {other:?} (not a list)")),
+                };
+                let idx = as_num(&self.eval(index)?, "index")?;
+                if idx < 0.0 || idx.fract() != 0.0 {
+                    return Err(format!("list index must be a non-negative whole number, got {idx}"));
+                }
+                items
+                    .get(idx as usize)
+                    .cloned()
+                    .ok_or_else(|| format!("index {idx} out of bounds for a list of length {}", items.len()))
             }
         }
     }
@@ -385,7 +413,21 @@ impl Runtime {
                 Ok(Flow::Normal)
             }
             Stmt::FnDef { name, params, body, .. } => {
-                self.functions.insert(name.clone(), (params.clone(), body.clone()));
+                self.functions.insert(name.clone(), (params.clone(), body.clone(), self.env.clone()));
+                Ok(Flow::Normal)
+            }
+            Stmt::For { var, iter, body } => {
+                let items = match self.eval(iter)? {
+                    Value::List(items) => items,
+                    other => return Err(format!("'for ... in' needs a list, got {other:?}")),
+                };
+                for item in items {
+                    self.env.insert(var.clone(), item);
+                    match self.exec_body(body)? {
+                        Flow::Normal => continue,
+                        flow @ Flow::Return(_) => return Ok(flow),
+                    }
+                }
                 Ok(Flow::Normal)
             }
             Stmt::Return(expr) => {
@@ -512,6 +554,20 @@ impl Runtime {
             }
             Stmt::While { cond, body } => {
                 while self.eval_bool(cond, "while")? {
+                    match self.exec_guarded_body(body, var, op, limit)? {
+                        Flow::Normal => continue,
+                        flow @ Flow::Return(_) => return Ok(flow),
+                    }
+                }
+                Ok(Flow::Normal)
+            }
+            Stmt::For { var: loop_var, iter, body } => {
+                let items = match self.eval(iter)? {
+                    Value::List(items) => items,
+                    other => return Err(format!("'for ... in' needs a list, got {other:?}")),
+                };
+                for item in items {
+                    self.env.insert(loop_var.clone(), item);
                     match self.exec_guarded_body(body, var, op, limit)? {
                         Flow::Normal => continue,
                         flow @ Flow::Return(_) => return Ok(flow),
@@ -706,19 +762,118 @@ let result = factorial(5)
     }
 
     #[test]
-    fn function_has_no_access_to_caller_locals() {
+    fn function_closes_over_a_variable_defined_before_it() {
         let rt = run(
             r#"
 let secret = 42
 fn peek() -> int {
   return secret
 }
+let result = peek()
 "#,
         );
-        let program = parse(lex("print(peek())").unwrap()).unwrap();
-        let mut rt2 = rt;
-        let err = rt2.run(&program).unwrap_err();
+        assert_eq!(rt.env["result"], Value::Num(42.0));
+    }
+
+    #[test]
+    fn function_does_not_see_a_variable_defined_after_it() {
+        // Hoisting registers `fn` with an empty captured scope; a call
+        // before the `fn` statement's own textual position only sees
+        // globals that existed at hoist time (none here).
+        let program = parse(
+            lex(r#"
+fn peek() -> int {
+  return secret
+}
+print(peek())
+let secret = 42
+"#)
+            .unwrap(),
+        )
+        .unwrap();
+        let mut rt = Runtime::new();
+        let err = rt.run(&program).unwrap_err();
         assert!(err.contains("undefined variable"), "expected an undefined-variable error, got {err:?}");
+    }
+
+    #[test]
+    fn closure_captures_by_value_not_by_reference() {
+        let rt = run(
+            r#"
+let secret = 1
+fn peek() -> int {
+  return secret
+}
+set secret = 999
+let result = peek()
+"#,
+        );
+        assert_eq!(
+            rt.env["result"],
+            Value::Num(1.0),
+            "closure should see the value captured at definition time, not the later mutation"
+        );
+    }
+
+    #[test]
+    fn writing_inside_a_function_never_touches_the_caller_scope() {
+        let rt = run(
+            r#"
+let x = 1
+fn mutate() {
+  set x = 999
+}
+let _ = mutate()
+"#,
+        );
+        assert_eq!(rt.env["x"], Value::Num(1.0), "the function only wrote its own local copy of x");
+    }
+
+    #[test]
+    fn list_literal_indexing_and_stdlib_helpers_work() {
+        let rt = run(
+            r#"
+let xs = [10, 20, 30]
+let first = xs[0]
+let count = list_len(xs)
+let ys = list_push(xs, 40)
+let last = ys[3]
+"#,
+        );
+        assert_eq!(rt.env["first"], Value::Num(10.0));
+        assert_eq!(rt.env["count"], Value::Num(3.0));
+        assert_eq!(rt.env["last"], Value::Num(40.0));
+        assert_eq!(rt.env["xs"], Value::List(vec![Value::Num(10.0), Value::Num(20.0), Value::Num(30.0)]), "list_push must not mutate the original");
+    }
+
+    #[test]
+    fn for_loop_sums_a_list() {
+        let rt = run(
+            r#"
+let xs = [1, 2, 3, 4]
+let total = 0
+for x in xs {
+  set total = total + x
+}
+"#,
+        );
+        assert_eq!(rt.env["total"], Value::Num(10.0));
+    }
+
+    #[test]
+    fn bound_guard_catches_a_violation_nested_inside_for() {
+        let rt = run(
+            r#"
+let speed = 0
+let readings = [5, 10, 999]
+bound speed <= 15 {
+  for r in readings {
+    set speed = r
+  }
+}
+"#,
+        );
+        assert_eq!(rt.env["speed"], Value::Num(10.0), "999 must be rejected by the guard, leaving the last safely-committed value (the loop itself still runs to completion)");
     }
 
     #[test]

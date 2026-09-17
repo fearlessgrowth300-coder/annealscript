@@ -74,6 +74,11 @@ pub enum Expr {
         op: UnOp,
         expr: Box<Expr>,
     },
+    List(Vec<Expr>),
+    Index {
+        list: Box<Expr>,
+        index: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,10 +124,24 @@ pub enum Stmt {
         cond: Expr,
         body: Vec<Stmt>,
     },
-    /// No closures: a function body only sees its own parameters, not the
-    /// caller's locals. That's a real simplification, not an oversight --
-    /// it keeps the runtime's scoping to "one flat map per call" instead of
-    /// a captured-environment chain, and nothing so far needs closures.
+    /// Iterates `iter` (must evaluate to a `List`), binding each element to
+    /// `var` in the current scope in turn -- same "no block scoping" model
+    /// as everything else here, so `var` keeps its last value after the
+    /// loop ends, same as Python's own `for` variable does.
+    For {
+        var: String,
+        iter: Expr,
+        body: Vec<Stmt>,
+    },
+    /// Closures capture their defining scope BY VALUE at the moment the
+    /// `fn` statement executes (a snapshot, not a live reference) -- see
+    /// `Runtime::exec_flow`'s `Stmt::FnDef` arm. That means a function
+    /// sees whatever its enclosing scope's variables held at definition
+    /// time, but a later `set` to one of those variables in the outer
+    /// scope is invisible to an already-defined closure. Real lexical
+    /// capture-by-reference would need shared mutable cells
+    /// (`Rc<RefCell<...>>`) threaded through the environment; nothing so
+    /// far has needed that extra machinery.
     FnDef {
         name: String,
         params: Vec<(String, Type)>,
