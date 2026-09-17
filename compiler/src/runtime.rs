@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{Comparator, Expr, Field, Literal, Program, Stmt, Type};
+use crate::ast::{BinOp, Comparator, Expr, Field, Literal, Program, Stmt, Type, UnOp};
 use crate::interval::Interval;
 use crate::solver::{self, Verdict};
 
@@ -30,6 +30,10 @@ pub enum Value {
     Dict(HashMap<String, Literal>),
     Struct(HashMap<String, Value>),
     Prob(Box<Value>, f32),
+    /// The value of a bare `return;` or of calling a function that falls
+    /// off the end of its body without an explicit `return`. There's no
+    /// unit/void type in the surface language, just this runtime value.
+    Unit,
 }
 
 pub fn format_value(v: &Value) -> String {
@@ -41,6 +45,64 @@ pub fn format_value(v: &Value) -> String {
         Value::Dict(_) => "<dict>".to_string(),
         Value::Struct(_) => "<struct>".to_string(),
         Value::Prob(inner, conf) => format!("Probability({}, conf={:.2})", format_value(inner), conf),
+        Value::Unit => "()".to_string(),
+    }
+}
+
+fn as_num(v: &Value, who: &str) -> Result<f64, String> {
+    match v {
+        Value::Num(n) => Ok(*n),
+        other => Err(format!("{who}: expected a number, got {other:?}")),
+    }
+}
+
+fn eval_binop(op: BinOp, l: Value, r: Value) -> Result<Value, String> {
+    match op {
+        BinOp::Add => match (&l, &r) {
+            (Value::Num(a), Value::Num(b)) => Ok(Value::Num(a + b)),
+            (Value::Str(a), Value::Str(b)) => Ok(Value::Str(format!("{a}{b}"))),
+            _ => Err(format!("'+' needs two numbers or two strings, got {l:?} and {r:?}")),
+        },
+        BinOp::Sub => Ok(Value::Num(as_num(&l, "'-'")? - as_num(&r, "'-'")?)),
+        BinOp::Mul => Ok(Value::Num(as_num(&l, "'*'")? * as_num(&r, "'*'")?)),
+        BinOp::Div => {
+            let denom = as_num(&r, "'/'")?;
+            if denom == 0.0 {
+                return Err("division by zero".into());
+            }
+            Ok(Value::Num(as_num(&l, "'/'")? / denom))
+        }
+        BinOp::Mod => {
+            let denom = as_num(&r, "'%'")?;
+            if denom == 0.0 {
+                return Err("modulo by zero".into());
+            }
+            Ok(Value::Num(as_num(&l, "'%'")? % denom))
+        }
+        BinOp::Eq => Ok(Value::Bool(l == r)),
+        BinOp::Ne => Ok(Value::Bool(l != r)),
+        BinOp::Lt => Ok(Value::Bool(as_num(&l, "'<'")? < as_num(&r, "'<'")?)),
+        BinOp::Le => Ok(Value::Bool(as_num(&l, "'<='")? <= as_num(&r, "'<='")?)),
+        BinOp::Gt => Ok(Value::Bool(as_num(&l, "'>'")? > as_num(&r, "'>'")?)),
+        BinOp::Ge => Ok(Value::Bool(as_num(&l, "'>='")? >= as_num(&r, "'>='")?)),
+        BinOp::And => match (&l, &r) {
+            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a && *b)),
+            _ => Err(format!("'&&' needs two bools, got {l:?} and {r:?}")),
+        },
+        BinOp::Or => match (&l, &r) {
+            (Value::Bool(a), Value::Bool(b)) => Ok(Value::Bool(*a || *b)),
+            _ => Err(format!("'||' needs two bools, got {l:?} and {r:?}")),
+        },
+    }
+}
+
+fn eval_unop(op: UnOp, v: Value) -> Result<Value, String> {
+    match op {
+        UnOp::Neg => Ok(Value::Num(-as_num(&v, "unary '-'")?)),
+        UnOp::Not => match v {
+            Value::Bool(b) => Ok(Value::Bool(!b)),
+            other => Err(format!("unary '!' needs a bool, got {other:?}")),
+        },
     }
 }
 
@@ -170,25 +232,62 @@ pub struct ProfileEvent {
     pub detail: String,
 }
 
+/// What a statement (or a whole body) did, beyond "ran": `Return` unwinds
+/// out of `if`/`while` bodies up to the enclosing function call, the way
+/// it would in any imperative language.
+enum Flow {
+    Normal,
+    Return(Value),
+}
+
 pub struct Runtime {
     pub structs: HashMap<String, Vec<Field>>,
     pub env: HashMap<String, Value>,
     pub profile: Vec<ProfileEvent>,
+    /// name -> (params, body). No closures: a call gets a fresh scope
+    /// containing only its bound parameters, not the caller's locals --
+    /// see the note on `Stmt::FnDef` in ast.rs for why.
+    functions: HashMap<String, (Vec<(String, Type)>, Vec<Stmt>)>,
 }
 
 impl Runtime {
     pub fn new() -> Self {
-        Runtime { structs: HashMap::new(), env: HashMap::new(), profile: Vec::new() }
+        Runtime { structs: HashMap::new(), env: HashMap::new(), profile: Vec::new(), functions: HashMap::new() }
     }
 
     pub fn run(&mut self, program: &Program) -> Result<(), String> {
+        // Hoist top-level function definitions so a function can be called
+        // before its textual definition, same as most languages allow at
+        // top level. Functions declared inside a nested block are only
+        // registered once execution actually reaches them (no hoisting
+        // there -- an accepted simplification, not an oversight).
         for stmt in program {
-            self.exec(stmt)?;
+            if let Stmt::FnDef { name, params, body, .. } = stmt {
+                self.functions.insert(name.clone(), (params.clone(), body.clone()));
+            }
         }
-        Ok(())
+        self.exec_body(program).map(|_| ())
     }
 
-    fn eval(&self, expr: &Expr) -> Result<Value, String> {
+    fn exec_body(&mut self, body: &[Stmt]) -> Result<Flow, String> {
+        for stmt in body {
+            match self.exec_flow(stmt)? {
+                Flow::Normal => continue,
+                flow @ Flow::Return(_) => return Ok(flow),
+            }
+        }
+        Ok(Flow::Normal)
+    }
+
+    /// Adapter for call sites that don't propagate control flow (bound
+    /// blocks' "provably safe" path): a `return` inside one of those just
+    /// completes that one statement instead of unwinding further. Real
+    /// call sites that need `return` to actually unwind use `exec_body`.
+    fn exec(&mut self, stmt: &Stmt) -> Result<(), String> {
+        self.exec_flow(stmt).map(|_| ())
+    }
+
+    fn eval(&mut self, expr: &Expr) -> Result<Value, String> {
         match expr {
             Expr::Literal(lit) => Ok(literal_to_value(lit)),
             Expr::Ident(name) => self.env.get(name).cloned().ok_or_else(|| format!("undefined variable {name:?}")),
@@ -213,36 +312,96 @@ impl Runtime {
                     other => other,
                 })
             }
+            Expr::Binary { op, left, right } => {
+                let l = self.eval(left)?;
+                let r = self.eval(right)?;
+                eval_binop(*op, l, r)
+            }
+            Expr::Unary { op, expr } => {
+                let v = self.eval(expr)?;
+                eval_unop(*op, v)
+            }
             Expr::Call { name, args } => {
                 let arg_values: Result<Vec<Value>, String> = args.iter().map(|a| self.eval(a)).collect();
-                crate::stdlib::call(name, arg_values?)
+                let arg_values = arg_values?;
+                if let Some((params, body)) = self.functions.get(name).cloned() {
+                    if params.len() != arg_values.len() {
+                        return Err(format!(
+                            "function {name:?} expects {} argument(s), got {}",
+                            params.len(),
+                            arg_values.len()
+                        ));
+                    }
+                    let local_env: HashMap<String, Value> =
+                        params.iter().map(|(pname, _)| pname.clone()).zip(arg_values).collect();
+                    let saved_env = std::mem::replace(&mut self.env, local_env);
+                    let result = self.exec_body(&body);
+                    self.env = saved_env;
+                    match result? {
+                        Flow::Return(v) => Ok(v),
+                        Flow::Normal => Ok(Value::Unit),
+                    }
+                } else {
+                    crate::stdlib::call(name, arg_values)
+                }
             }
         }
     }
 
-    fn exec(&mut self, stmt: &Stmt) -> Result<(), String> {
+    fn exec_flow(&mut self, stmt: &Stmt) -> Result<Flow, String> {
         match stmt {
             Stmt::StructDef { name, fields } => {
                 self.structs.insert(name.clone(), fields.clone());
-                Ok(())
+                Ok(Flow::Normal)
             }
             Stmt::Let { name, expr, .. } => {
                 let v = self.eval(expr)?;
                 self.env.insert(name.clone(), v);
-                Ok(())
+                Ok(Flow::Normal)
             }
             Stmt::Set { name, expr } => {
                 let v = self.eval(expr)?;
                 self.env.insert(name.clone(), v);
-                Ok(())
+                Ok(Flow::Normal)
             }
             Stmt::Print(expr) => {
                 let v = self.eval(expr)?;
                 println!("{}", format_value(&v));
-                Ok(())
+                Ok(Flow::Normal)
             }
-            Stmt::Intent { source, struct_name, var } => self.exec_intent(source, struct_name, var),
-            Stmt::Bound { var, op, limit, body } => self.exec_bound(var, op, *limit, body),
+            Stmt::Intent { source, struct_name, var } => self.exec_intent(source, struct_name, var).map(|_| Flow::Normal),
+            Stmt::Bound { var, op, limit, body } => self.exec_bound(var, op, *limit, body).map(|_| Flow::Normal),
+            Stmt::If { cond, then_body, else_body } => {
+                let taken = self.eval_bool(cond, "if")?;
+                self.exec_body(if taken { then_body } else { else_body })
+            }
+            Stmt::While { cond, body } => {
+                while self.eval_bool(cond, "while")? {
+                    match self.exec_body(body)? {
+                        Flow::Normal => continue,
+                        flow @ Flow::Return(_) => return Ok(flow),
+                    }
+                }
+                Ok(Flow::Normal)
+            }
+            Stmt::FnDef { name, params, body, .. } => {
+                self.functions.insert(name.clone(), (params.clone(), body.clone()));
+                Ok(Flow::Normal)
+            }
+            Stmt::Return(expr) => {
+                let v = match expr {
+                    Some(e) => self.eval(e)?,
+                    None => Value::Unit,
+                };
+                Ok(Flow::Return(v))
+            }
+        }
+    }
+
+    fn eval_bool(&mut self, expr: &Expr, who: &str) -> Result<bool, String> {
+        match self.eval(expr)? {
+            Value::Bool(b) => Ok(b),
+            other => Err(format!("{who} condition must be a bool, got {other:?}")),
         }
     }
 
@@ -315,34 +474,63 @@ impl Runtime {
                 );
                 Ok(())
             }
-            Verdict::Unknown { .. } => {
-                for s in body {
-                    if let Stmt::Set { name, expr } = s {
-                        if name == var {
-                            let candidate = self.eval(expr)?;
-                            let ok = match &candidate {
-                                Value::Num(n) => match op {
-                                    Comparator::Le => *n <= limit,
-                                    Comparator::Ge => *n >= limit,
-                                },
-                                _ => false,
-                            };
-                            if ok {
-                                self.env.insert(name.clone(), candidate);
-                            } else {
-                                eprintln!(
-                                    "[solver] runtime guard rejected write: {name:?}={candidate:?} \
-                                     violates {op:?} {limit}; heap not updated"
-                                );
-                            }
-                            continue;
-                        }
-                    }
-                    self.exec(s)?;
+            Verdict::Unknown { .. } => self.exec_guarded_body(body, var, op, limit).map(|_| ()),
+        }
+    }
+
+    /// Executes a bound block's body when the solver couldn't prove it
+    /// safe, intercepting every write to `var` -- at any nesting depth
+    /// inside `if`/`while`, not just directly in the block -- and checking
+    /// it before it reaches `env`. `solve_bound` bails out to `Unknown`
+    /// the moment it sees any `if`/`while` in the block specifically so
+    /// this path, not an unguarded one, is what runs whenever control flow
+    /// is present.
+    fn exec_guarded(&mut self, stmt: &Stmt, var: &str, op: &Comparator, limit: f64) -> Result<Flow, String> {
+        match stmt {
+            Stmt::Set { name, expr } if name == var => {
+                let candidate = self.eval(expr)?;
+                let ok = match &candidate {
+                    Value::Num(n) => match op {
+                        Comparator::Le => *n <= limit,
+                        Comparator::Ge => *n >= limit,
+                    },
+                    _ => false,
+                };
+                if ok {
+                    self.env.insert(name.clone(), candidate);
+                } else {
+                    eprintln!(
+                        "[solver] runtime guard rejected write: {name:?}={candidate:?} \
+                         violates {op:?} {limit}; heap not updated"
+                    );
                 }
-                Ok(())
+                Ok(Flow::Normal)
+            }
+            Stmt::If { cond, then_body, else_body } => {
+                let taken = self.eval_bool(cond, "if")?;
+                self.exec_guarded_body(if taken { then_body } else { else_body }, var, op, limit)
+            }
+            Stmt::While { cond, body } => {
+                while self.eval_bool(cond, "while")? {
+                    match self.exec_guarded_body(body, var, op, limit)? {
+                        Flow::Normal => continue,
+                        flow @ Flow::Return(_) => return Ok(flow),
+                    }
+                }
+                Ok(Flow::Normal)
+            }
+            other => self.exec_flow(other),
+        }
+    }
+
+    fn exec_guarded_body(&mut self, body: &[Stmt], var: &str, op: &Comparator, limit: f64) -> Result<Flow, String> {
+        for s in body {
+            match self.exec_guarded(s, var, op, limit)? {
+                Flow::Normal => continue,
+                flow @ Flow::Return(_) => return Ok(flow),
             }
         }
+        Ok(Flow::Normal)
     }
 }
 
@@ -453,5 +641,115 @@ bound speed <= 15 {
 "#,
         );
         assert_eq!(rt2.env["speed"], Value::Num(0.0), "999 > 15, guard must reject before heap commit");
+    }
+
+    #[test]
+    fn arithmetic_respects_precedence_and_parens() {
+        let rt = run("let a = 2 + 3 * 4\nlet b = (2 + 3) * 4\n");
+        assert_eq!(rt.env["a"], Value::Num(14.0));
+        assert_eq!(rt.env["b"], Value::Num(20.0));
+    }
+
+    #[test]
+    fn boolean_and_comparison_operators_work() {
+        let rt = run("let a = 5 > 3 && 2 < 4\nlet b = 5 == 5 || false\nlet c = !false\n");
+        assert_eq!(rt.env["a"], Value::Bool(true));
+        assert_eq!(rt.env["b"], Value::Bool(true));
+        assert_eq!(rt.env["c"], Value::Bool(true));
+    }
+
+    #[test]
+    fn if_else_branches_correctly() {
+        let rt = run(
+            r#"
+let x = 10
+let y = 0
+if x > 5 {
+  set y = 1
+} else {
+  set y = 2
+}
+"#,
+        );
+        assert_eq!(rt.env["y"], Value::Num(1.0));
+    }
+
+    #[test]
+    fn while_loop_sums_to_expected_total() {
+        let rt = run(
+            r#"
+let i = 0
+let total = 0
+while i < 5 {
+  set total = total + i
+  set i = i + 1
+}
+"#,
+        );
+        assert_eq!(rt.env["total"], Value::Num(10.0)); // 0+1+2+3+4
+    }
+
+    #[test]
+    fn recursive_function_computes_factorial() {
+        let rt = run(
+            r#"
+fn factorial(n: int) -> int {
+  if n <= 1 {
+    return 1
+  }
+  return n * factorial(n - 1)
+}
+let result = factorial(5)
+"#,
+        );
+        assert_eq!(rt.env["result"], Value::Num(120.0));
+    }
+
+    #[test]
+    fn function_has_no_access_to_caller_locals() {
+        let rt = run(
+            r#"
+let secret = 42
+fn peek() -> int {
+  return secret
+}
+"#,
+        );
+        let program = parse(lex("print(peek())").unwrap()).unwrap();
+        let mut rt2 = rt;
+        let err = rt2.run(&program).unwrap_err();
+        assert!(err.contains("undefined variable"), "expected an undefined-variable error, got {err:?}");
+    }
+
+    #[test]
+    fn bound_guard_catches_a_violation_nested_inside_if() {
+        let rt = run(
+            r#"
+let speed = 0
+let sensor = 999
+bound speed <= 15 {
+  if true {
+    set speed = sensor
+  }
+}
+"#,
+        );
+        assert_eq!(rt.env["speed"], Value::Num(0.0), "nested unsafe write must still be caught by the runtime guard");
+    }
+
+    #[test]
+    fn bound_guard_allows_a_safe_write_nested_inside_if() {
+        let rt = run(
+            r#"
+let speed = 0
+let sensor = 10
+bound speed <= 15 {
+  if true {
+    set speed = sensor
+  }
+}
+"#,
+        );
+        assert_eq!(rt.env["speed"], Value::Num(10.0));
     }
 }

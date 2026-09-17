@@ -33,7 +33,7 @@
       "patterns": [
         {
           "name": "keyword.control.annealscript",
-          "match": "\\b(struct|let|set|intent|bound|as|print|default|resolve|above|else)\\b"
+          "match": "\\b(struct|let|set|intent|bound|as|print|default|resolve|above|else|if|while|fn|return)\\b"
         },
         { "name": "constant.language.annealscript", "match": "\\b(true|false)\\b" }
       ]
@@ -46,7 +46,7 @@
     },
     "operators": {
       "patterns": [
-        { "name": "keyword.operator.annealscript", "match": "->|=>|<=|>=|=" }
+        { "name": "keyword.operator.annealscript", "match": "->|=>|<=|>=|==|!=|&&|\\|\\||[+\\-*/%!<>=]" }
       ]
     },
     "function-calls": {

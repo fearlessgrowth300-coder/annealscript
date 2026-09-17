@@ -28,7 +28,20 @@ statement       = struct_def
                 | set_stmt
                 | intent_stmt
                 | bound_stmt
-                | print_stmt ;
+                | print_stmt
+                | if_stmt
+                | while_stmt
+                | fn_def
+                | return_stmt ;
+
+if_stmt         = "if" , expr , block , [ "else" , ( block | if_stmt ) ] ;
+while_stmt      = "while" , expr , block ;
+block           = "{" , { statement } , "}" ;
+
+fn_def          = "fn" , identifier , "(" , [ param , { "," , param } ] , ")" ,
+                   [ "->" , type ] , block ;
+param           = identifier , ":" , type ;
+return_stmt     = "return" , [ expr ] ;
 
 struct_def      = "struct" , identifier , "{" , field_list , "}" ;
 field_list      = [ field , { "," , field } ] ;
@@ -52,10 +65,22 @@ comparator      = "<=" | ">=" ;
 
 print_stmt      = "print" , "(" , expr , ")" ;
 
-expr            = dict_literal
+(* precedence, low to high: or, and, equality, comparison, additive,
+   multiplicative, unary, primary -- standard precedence-climbing *)
+expr            = or_expr ;
+or_expr         = and_expr , { "||" , and_expr } ;
+and_expr        = equality_expr , { "&&" , equality_expr } ;
+equality_expr   = comparison_expr , { ( "==" | "!=" ) , comparison_expr } ;
+comparison_expr = additive_expr , { ( "<" | ">" | "<=" | ">=" ) , additive_expr } ;
+additive_expr   = multiplicative_expr , { ( "+" | "-" ) , multiplicative_expr } ;
+multiplicative_expr = unary_expr , { ( "*" | "/" | "%" ) , unary_expr } ;
+unary_expr      = [ "-" | "!" ] , unary_expr | primary_expr ;
+
+primary_expr    = dict_literal
                 | field_access
                 | resolve_expr
                 | call_expr
+                | "(" , expr , ")"
                 | identifier
                 | literal ;
 
@@ -67,8 +92,9 @@ resolve_expr    = "resolve" , expr , "{" ,
                   "}" ;                        (* collapses Probability<T> -> T *)
 
 call_expr       = identifier , "(" , [ expr , { "," , expr } ] , ")" ;
-                  (* calls a stdlib builtin -- see §7. No user-defined
-                     functions or `use`/module-path syntax yet. *)
+                  (* calls a stdlib builtin (§7) OR a user-defined `fn` --
+                     resolved at the call site. No `use`/module-path syntax
+                     to disambiguate namespaces yet. *)
 
 dict_literal    = "{" , [ pair , { "," , pair } ] , "}" ;
 pair            = string , ":" , value ;
@@ -76,6 +102,10 @@ value           = string | number | boolean ;
 
 literal         = string | number | boolean ;
 ```
+
+Arithmetic on `Value::Num`, string `+` is concatenation, `==`/`!=` work on
+any two values of the same shape (structural equality), everything else
+requires matching types (no implicit coercion at runtime either).
 
 ## 3. Type universe
 
@@ -130,7 +160,13 @@ Implemented in `runtime.rs`'s `eval`.
   expression. `Safe` runs the block with no guard; `Violation` rejects the
   whole block before it executes (nothing reaches the heap); `Unknown`
   (e.g. the value flows through an intent-resolved field, opaque to the
-  solver) falls back to a runtime check before each write commits.
+  solver) falls back to a runtime check before each write commits. A
+  `bound` body containing `if`/`while` is **always** `Unknown` -- the Z3
+  encoding reasons about a flat list of assignments, not branches or
+  loops, so it conservatively defers rather than risk missing a write
+  hidden in a branch. The runtime guard (`Runtime::exec_guarded`) still
+  walks the real nesting and catches every write to the bound variable at
+  whatever depth it's at, `if`/`while` included.
 
 ```
 let speed = 0
@@ -139,6 +175,40 @@ bound speed <= 15 {
 }
 set speed = 999          # COMPILE ERROR -- outside the bound scope
 ```
+
+## 6a. Functions and control flow
+
+AnnealScript is general-purpose as of this section: `if`/`else`, `while`,
+and user-defined `fn` with parameters, a return type, and `return` make it
+Turing-complete, not just a narrow schema/safety DSL.
+
+```
+fn factorial(n: int) -> int {
+  if n <= 1 {
+    return 1
+  }
+  return n * factorial(n - 1)
+}
+```
+
+- **No closures.** A function body sees only its own parameters -- it
+  cannot read or write the caller's `let`/`set` variables at all, even
+  same-named ones. Calling a function swaps `env` for a fresh scope
+  containing just the bound arguments, runs the body, then restores the
+  caller's `env`. This is a real simplification (see `ast.rs`'s note on
+  `Stmt::FnDef`), not an oversight -- nothing so far needs a captured
+  environment, and it keeps the runtime's scoping to one flat map per call
+  instead of a chain.
+- **Hoisting**: top-level `fn` definitions can be called before their
+  textual position in the file (`Runtime::run` registers them all before
+  executing anything). A function defined inside a nested block is only
+  registered once execution reaches it -- no hoisting there.
+- **No unit type in the surface syntax**: a bare `return` and a function
+  that falls off the end of its body both produce `Value::Unit` internally
+  (prints as `()`), but there's no way to name that type in a signature.
+- The bound-scope rule (§6) also holds across `if`/`while` at the same
+  scope, but treats a function body as a clean slate with no active
+  bounds inherited from the caller -- see `typecheck.rs`'s `walk_scope`.
 
 ## 7. Standard library (flat builtins, `compiler/src/stdlib.rs`)
 
@@ -184,11 +254,13 @@ name; each is namespaced in name only:
 
 ## 10. Explicitly out of scope so far
 
-- User-defined functions, `use`/module paths, arithmetic expressions,
-  control flow (`if`/loops) — the grammar in §2 is everything that exists.
-- LLVM IR codegen, a standalone tensor execution graph, GGML bindings.
+- Closures, arrays/lists, `use`/module paths, `for` loops, `break`/
+  `continue` — the grammar in §2 is everything that exists.
+- LLVM IR codegen, a standalone tensor execution graph, GGML bindings —
+  this is still an interpreter, not a compiler to machine code, despite
+  the name.
 - A hosted package registry; TLS in `net_get`; semver ranges in `annealpm`
   (exact version or `*`/latest only).
-- General SMT reasoning beyond the bound rule — `solver.rs` documents
-  exactly when the interval-style encoding it uses would need to become
-  a richer one.
+- General SMT reasoning over branches/loops — `solver.rs` conservatively
+  defers to the runtime guard for any `bound` body containing `if`/`while`
+  rather than attempt it (§6).

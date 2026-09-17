@@ -68,6 +68,17 @@ pub fn solve_bound(
     body: &[Stmt],
     env_ranges: &HashMap<String, Interval>,
 ) -> Verdict {
+    // Conservative bailout: this encoding reasons about a flat list of
+    // assignments, not branches or loops. Rather than silently ignoring a
+    // `set` hidden inside an `if`/`while` (which would let an unsafe
+    // program get misclassified as `Safe`), any control flow in the block
+    // makes the whole thing `Unknown` -- the runtime's per-write guard
+    // (`Runtime::exec_guarded`) then walks the real nesting and catches
+    // every write for real, at whatever depth it's at.
+    if body.iter().any(|s| matches!(s, Stmt::If { .. } | Stmt::While { .. })) {
+        return Verdict::Unknown { stmt_index: 0 };
+    }
+
     // z3-rs manages an implicit thread-local Context/Solver plumbing; no
     // explicit Context needs to be created or threaded through here.
     for (i, stmt) in body.iter().enumerate() {
@@ -137,6 +148,17 @@ mod tests {
         let body = vec![Stmt::Set {
             name: "speed".into(),
             expr: Expr::FieldAccess("reading".into(), "level".into()),
+        }];
+        let verdict = solve_bound("speed", &Comparator::Le, 15.0, &body, &HashMap::new());
+        assert_eq!(verdict, Verdict::Unknown { stmt_index: 0 });
+    }
+
+    #[test]
+    fn bails_to_unknown_when_body_contains_control_flow() {
+        let body = vec![Stmt::If {
+            cond: Expr::Literal(Literal::Bool(true)),
+            then_body: vec![Stmt::Set { name: "speed".into(), expr: Expr::Literal(Literal::Num(10.0)) }],
+            else_body: vec![],
         }];
         let verdict = solve_bound("speed", &Comparator::Le, 15.0, &body, &HashMap::new());
         assert_eq!(verdict, Verdict::Unknown { stmt_index: 0 });

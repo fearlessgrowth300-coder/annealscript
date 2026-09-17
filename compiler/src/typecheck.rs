@@ -8,8 +8,9 @@
 //!
 //! Deliberately NOT attempted here: full Hindley-Milner-style inference,
 //! generics beyond `Probability<T>`, or checking expression types beyond
-//! what's needed for these two rules. There's no user-defined-function
-//! grammar yet (see stdlib.rs), so there's nothing else to type-check.
+//! what's needed for these two rules -- e.g. arithmetic/boolean expression
+//! types and function-call argument counts are only checked at runtime,
+//! not here.
 
 use crate::ast::{Program, Stmt, Type};
 
@@ -105,9 +106,34 @@ fn walk_scope(stmts: &[Stmt], active_bounds: &[String], diags: &mut Vec<Diagnost
                 nested_active.retain(|v| v != var);
                 walk_scope(body, &nested_active, diags);
             }
+            Stmt::If { then_body, else_body, .. } => {
+                // `if`/`while` aren't their own scope for this rule -- a
+                // `set` inside one is exactly as "outside the bound block"
+                // as one written next to it, so both this scope's own
+                // bounds (`scoped_here`) and the enclosing ones carry in.
+                let combined = combine(active_bounds, &scoped_here);
+                walk_scope(then_body, &combined, diags);
+                walk_scope(else_body, &combined, diags);
+            }
+            Stmt::While { body, .. } => {
+                let combined = combine(active_bounds, &scoped_here);
+                walk_scope(body, &combined, diags);
+            }
+            Stmt::FnDef { body, .. } => {
+                // No closures (see ast.rs on `Stmt::FnDef`): a function
+                // body is a fresh scope that can't see the caller's bound
+                // variables at all, so it starts with no active bounds.
+                walk_scope(body, &[], diags);
+            }
             _ => {}
         }
     }
+}
+
+fn combine(active_bounds: &[String], scoped_here: &[String]) -> Vec<String> {
+    let mut combined = active_bounds.to_vec();
+    combined.extend(scoped_here.iter().cloned());
+    combined
 }
 
 #[cfg(test)]
@@ -152,6 +178,54 @@ set speed = 999
         );
         assert_eq!(diags.len(), 1);
         assert!(diags[0].message.contains("speed"));
+    }
+
+    #[test]
+    fn flags_set_inside_an_if_at_the_same_scope_as_the_bound() {
+        let diags = check_src(
+            r#"
+let speed = 0
+bound speed <= 15 {
+  set speed = 10
+}
+if true {
+  set speed = 999
+}
+"#,
+        );
+        assert_eq!(diags.len(), 1);
+        assert!(diags[0].message.contains("speed"));
+    }
+
+    #[test]
+    fn allows_set_inside_an_if_nested_inside_the_bound_block() {
+        let diags = check_src(
+            r#"
+let speed = 0
+bound speed <= 15 {
+  if true {
+    set speed = 10
+  }
+}
+"#,
+        );
+        assert!(diags.is_empty());
+    }
+
+    #[test]
+    fn function_body_is_not_constrained_by_an_outer_bound() {
+        let diags = check_src(
+            r#"
+let speed = 0
+bound speed <= 15 {
+  set speed = 10
+}
+fn reset() {
+  set speed = 999
+}
+"#,
+        );
+        assert!(diags.is_empty(), "a same-named var inside a closure-free function body isn't the outer variable");
     }
 
     #[test]

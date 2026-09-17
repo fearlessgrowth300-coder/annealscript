@@ -23,6 +23,29 @@ pub enum Comparator {
     Ge,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UnOp {
+    Neg,
+    Not,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Literal(Literal),
@@ -35,13 +58,21 @@ pub enum Expr {
         above: Box<Expr>,
         else_branch: Box<Expr>,
     },
-    /// A call to a stdlib builtin, e.g. `fs_read_file("a.txt")`. There is no
-    /// user-defined-function or module (`use std::x`) syntax yet -- see
-    /// docs/grammar-and-types.md Phase 4 notes -- so callees are always one
-    /// of the flat builtin names registered in `stdlib.rs`.
+    /// A call to a stdlib builtin (`stdlib.rs`) OR a user-defined `fn`
+    /// (`Stmt::FnDef`) -- resolved by the runtime at the call site, since
+    /// there's still no module/`use` syntax to disambiguate namespaces.
     Call {
         name: String,
         args: Vec<Expr>,
+    },
+    Binary {
+        op: BinOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+    Unary {
+        op: UnOp,
+        expr: Box<Expr>,
     },
 }
 
@@ -79,6 +110,26 @@ pub enum Stmt {
         body: Vec<Stmt>,
     },
     Print(Expr),
+    If {
+        cond: Expr,
+        then_body: Vec<Stmt>,
+        else_body: Vec<Stmt>,
+    },
+    While {
+        cond: Expr,
+        body: Vec<Stmt>,
+    },
+    /// No closures: a function body only sees its own parameters, not the
+    /// caller's locals. That's a real simplification, not an oversight --
+    /// it keeps the runtime's scoping to "one flat map per call" instead of
+    /// a captured-environment chain, and nothing so far needs closures.
+    FnDef {
+        name: String,
+        params: Vec<(String, Type)>,
+        ret: Option<Type>,
+        body: Vec<Stmt>,
+    },
+    Return(Option<Expr>),
 }
 
 pub type Program = Vec<Stmt>;

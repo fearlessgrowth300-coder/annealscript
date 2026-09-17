@@ -15,16 +15,30 @@ pub enum Token {
     Resolve,
     Above,
     Else,
+    If,
+    While,
+    Fn,
+    Return,
     Arrow,    // ->
     FatArrow, // =>
     Le,       // <=
     Ge,       // >=
+    EqEq,     // ==
+    NotEq,    // !=
+    AmpAmp,   // &&
+    PipePipe, // ||
+    Bang,     // !
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Percent,
     LBrace,
     RBrace,
     LParen,
     RParen,
-    LAngle, // <
-    RAngle, // >
+    LAngle, // < (generic open, or "less than" in an expression)
+    RAngle, // > (generic close, or "greater than" in an expression)
     Colon,
     Comma,
     Dot,
@@ -134,6 +148,10 @@ pub fn lex(src: &str) -> Result<Vec<Spanned>, LexError> {
                 "resolve" => Token::Resolve,
                 "above" => Token::Above,
                 "else" => Token::Else,
+                "if" => Token::If,
+                "while" => Token::While,
+                "fn" => Token::Fn,
+                "return" => Token::Return,
                 _ => Token::Ident(text),
             };
             tokens.push((tok, line));
@@ -161,19 +179,53 @@ pub fn lex(src: &str) -> Result<Vec<Spanned>, LexError> {
             i += 2;
             continue;
         }
+        if c == '=' && chars.get(i + 1) == Some(&'=') {
+            tokens.push((Token::EqEq, line));
+            i += 2;
+            continue;
+        }
+        if c == '!' && chars.get(i + 1) == Some(&'=') {
+            tokens.push((Token::NotEq, line));
+            i += 2;
+            continue;
+        }
+        if c == '&' && chars.get(i + 1) == Some(&'&') {
+            tokens.push((Token::AmpAmp, line));
+            i += 2;
+            continue;
+        }
+        if c == '|' && chars.get(i + 1) == Some(&'|') {
+            tokens.push((Token::PipePipe, line));
+            i += 2;
+            continue;
+        }
 
         // single-character punctuation
+        //
+        // NOTE: `<`/`>` do NOT track `depth` the way `{`/`(` do. They used
+        // to (for suppressing newlines inside `Probability<T>`), but now
+        // that they also serve as comparison operators (`a < b`), they
+        // don't reliably balance -- `if a < b { ... }` would push depth
+        // positive with no closing `>` and suppress every newline for the
+        // rest of the file. Generic types are always written on one line
+        // in practice, so nothing is lost by not tracking them.
         let tok = match c {
             '{' => { depth += 1; Token::LBrace }
             '}' => { depth -= 1; Token::RBrace }
             '(' => { depth += 1; Token::LParen }
             ')' => { depth -= 1; Token::RParen }
-            '<' => { depth += 1; Token::LAngle }
-            '>' => { depth -= 1; Token::RAngle }
+            '<' => Token::LAngle,
+            '>' => Token::RAngle,
             ':' => Token::Colon,
             ',' => Token::Comma,
             '.' => Token::Dot,
             '=' => Token::Equals,
+            '+' => Token::Plus,
+            '-' => Token::Minus,
+            '*' => Token::Star,
+            '/' => Token::Slash,
+            '%' => Token::Percent,
+            '!' => Token::Bang,
             other => {
                 return Err(LexError {
                     line,

@@ -81,7 +81,82 @@ impl Parser {
             Token::Intent => self.parse_intent(),
             Token::Bound => self.parse_bound(),
             Token::Print => self.parse_print(),
+            Token::If => self.parse_if(),
+            Token::While => self.parse_while(),
+            Token::Fn => self.parse_fn(),
+            Token::Return => self.parse_return(),
             other => Err(self.err(format!("unexpected token {other:?} at statement start"))),
+        }
+    }
+
+    fn parse_block(&mut self) -> PResult<Vec<Stmt>> {
+        self.expect(&Token::LBrace)?;
+        self.skip_newlines();
+        let mut stmts = Vec::new();
+        while *self.peek() != Token::RBrace {
+            stmts.push(self.parse_statement()?);
+            self.skip_newlines();
+        }
+        self.expect(&Token::RBrace)?;
+        Ok(stmts)
+    }
+
+    fn parse_if(&mut self) -> PResult<Stmt> {
+        self.expect(&Token::If)?;
+        let cond = self.parse_expr()?;
+        let then_body = self.parse_block()?;
+        self.skip_newlines();
+        let mut else_body = Vec::new();
+        if *self.peek() == Token::Else {
+            self.advance();
+            self.skip_newlines();
+            if *self.peek() == Token::If {
+                else_body.push(self.parse_if()?);
+            } else {
+                else_body = self.parse_block()?;
+            }
+        }
+        Ok(Stmt::If { cond, then_body, else_body })
+    }
+
+    fn parse_while(&mut self) -> PResult<Stmt> {
+        self.expect(&Token::While)?;
+        let cond = self.parse_expr()?;
+        let body = self.parse_block()?;
+        Ok(Stmt::While { cond, body })
+    }
+
+    fn parse_fn(&mut self) -> PResult<Stmt> {
+        self.expect(&Token::Fn)?;
+        let name = self.expect_ident()?;
+        self.expect(&Token::LParen)?;
+        let mut params = Vec::new();
+        while *self.peek() != Token::RParen {
+            let pname = self.expect_ident()?;
+            self.expect(&Token::Colon)?;
+            let ptype = self.parse_type()?;
+            params.push((pname, ptype));
+            if *self.peek() == Token::Comma {
+                self.advance();
+            }
+        }
+        self.expect(&Token::RParen)?;
+        let ret = if *self.peek() == Token::Arrow {
+            self.advance();
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        let body = self.parse_block()?;
+        Ok(Stmt::FnDef { name, params, ret, body })
+    }
+
+    fn parse_return(&mut self) -> PResult<Stmt> {
+        self.expect(&Token::Return)?;
+        if matches!(self.peek(), Token::Newline | Token::RBrace | Token::Eof) {
+            Ok(Stmt::Return(None))
+        } else {
+            Ok(Stmt::Return(Some(self.parse_expr()?)))
         }
     }
 
@@ -204,10 +279,123 @@ impl Parser {
         Ok(Stmt::Print(expr))
     }
 
+    /// Entry point: standard precedence-climbing chain, lowest to highest
+    /// binding (or, and, equality, comparison, additive, multiplicative,
+    /// unary, primary). Every other parser method that wants "an
+    /// expression" calls this, not `parse_primary` directly, so arithmetic
+    /// and boolean logic work everywhere an expression is expected --
+    /// function args, `if`/`while` conditions, `resolve` branches, etc.
     fn parse_expr(&mut self) -> PResult<Expr> {
+        self.parse_or()
+    }
+
+    fn parse_or(&mut self) -> PResult<Expr> {
+        let mut left = self.parse_and()?;
+        while *self.peek() == Token::PipePipe {
+            self.advance();
+            let right = self.parse_and()?;
+            left = Expr::Binary { op: BinOp::Or, left: Box::new(left), right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_and(&mut self) -> PResult<Expr> {
+        let mut left = self.parse_equality()?;
+        while *self.peek() == Token::AmpAmp {
+            self.advance();
+            let right = self.parse_equality()?;
+            left = Expr::Binary { op: BinOp::And, left: Box::new(left), right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_equality(&mut self) -> PResult<Expr> {
+        let mut left = self.parse_comparison()?;
+        loop {
+            let op = match self.peek() {
+                Token::EqEq => BinOp::Eq,
+                Token::NotEq => BinOp::Ne,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_comparison()?;
+            left = Expr::Binary { op, left: Box::new(left), right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_comparison(&mut self) -> PResult<Expr> {
+        let mut left = self.parse_additive()?;
+        loop {
+            let op = match self.peek() {
+                Token::Le => BinOp::Le,
+                Token::Ge => BinOp::Ge,
+                Token::LAngle => BinOp::Lt,
+                Token::RAngle => BinOp::Gt,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_additive()?;
+            left = Expr::Binary { op, left: Box::new(left), right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_additive(&mut self) -> PResult<Expr> {
+        let mut left = self.parse_multiplicative()?;
+        loop {
+            let op = match self.peek() {
+                Token::Plus => BinOp::Add,
+                Token::Minus => BinOp::Sub,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_multiplicative()?;
+            left = Expr::Binary { op, left: Box::new(left), right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_multiplicative(&mut self) -> PResult<Expr> {
+        let mut left = self.parse_unary()?;
+        loop {
+            let op = match self.peek() {
+                Token::Star => BinOp::Mul,
+                Token::Slash => BinOp::Div,
+                Token::Percent => BinOp::Mod,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_unary()?;
+            left = Expr::Binary { op, left: Box::new(left), right: Box::new(right) };
+        }
+        Ok(left)
+    }
+
+    fn parse_unary(&mut self) -> PResult<Expr> {
+        match self.peek() {
+            Token::Minus => {
+                self.advance();
+                Ok(Expr::Unary { op: UnOp::Neg, expr: Box::new(self.parse_unary()?) })
+            }
+            Token::Bang => {
+                self.advance();
+                Ok(Expr::Unary { op: UnOp::Not, expr: Box::new(self.parse_unary()?) })
+            }
+            _ => self.parse_primary(),
+        }
+    }
+
+    fn parse_primary(&mut self) -> PResult<Expr> {
         match self.peek().clone() {
             Token::LBrace => self.parse_dict(),
             Token::Resolve => self.parse_resolve(),
+            Token::LParen => {
+                self.advance();
+                let inner = self.parse_expr()?;
+                self.expect(&Token::RParen)?;
+                Ok(inner)
+            }
             Token::Str(s) => {
                 self.advance();
                 Ok(Expr::Literal(Literal::Str(s)))
